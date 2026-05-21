@@ -438,6 +438,12 @@ h2 {
   grid-template-columns: 1fr 90px 170px 150px 90px;
 }
 
+.downloadActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .benchGrid {
   grid-template-columns: 1fr 80px 80px 100px 110px 90px;
 }
@@ -465,12 +471,17 @@ h2 {
   color: #0f5888;
 }
 
+.pill.retrying, .pill.paused {
+  background: #fff4d8;
+  color: #8a5b06;
+}
+
 .pill.loaded, .pill.completed {
   background: #e3f5e7;
   color: #1e6a35;
 }
 
-.pill.failed, .pill.aborted {
+.pill.failed, .pill.aborted, .pill.cancelled {
   background: #fde7e4;
   color: #9b2d20;
 }

@@ -85,6 +85,7 @@ def _model_rows() -> list[dict[str, Any]]:
 @app.on_event("startup")
 async def startup() -> None:
     event_hub.bind_loop()
+    download_manager.resume_incomplete()
 
 
 @app.get("/api/settings")
@@ -159,6 +160,14 @@ def list_downloads() -> list[dict[str, Any]]:
 def cancel_download(download_id: str) -> dict[str, Any]:
     download_manager.cancel(download_id)
     return {"ok": True}
+
+
+@app.post("/api/downloads/{download_id}/resume")
+def resume_download(download_id: str) -> dict[str, Any]:
+    try:
+        return download_manager.resume(download_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @app.get("/api/models")

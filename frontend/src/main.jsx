@@ -374,6 +374,15 @@ function Downloads({ downloads, reload, toast }) {
       toast(error.message);
     }
   }
+  async function resume(download) {
+    try {
+      await request(`/api/downloads/${download.id}/resume`, { method: "POST" });
+      reload();
+      toast("Download resumed");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
   return (
     <section className="band">
       <div className="sectionTitle">
@@ -391,7 +400,10 @@ function Downloads({ downloads, reload, toast }) {
               <Pill tone={download.status}>{download.status}</Pill>
               <div><Progress value={p} /><small>{p.toFixed(1)}% done / {(100 - p).toFixed(1)}% left</small></div>
               <span>{formatBytes(download.bytes_done)} / {formatBytes(download.bytes_total)}</span>
-              <span>{["queued", "running"].includes(download.status) && <button onClick={() => cancel(download)}><Square size={14} /> Cancel</button>}</span>
+              <span className="downloadActions">
+                {["queued", "running", "retrying"].includes(download.status) && <button onClick={() => cancel(download)}><Square size={14} /> Cancel</button>}
+                {["paused", "failed", "cancelled"].includes(download.status) && <button onClick={() => resume(download)}><RefreshCw size={14} /> Resume</button>}
+              </span>
             </div>
           );
         })}
