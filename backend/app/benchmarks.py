@@ -14,8 +14,54 @@ class BenchmarkManager:
     def presets(self) -> list[dict[str, Any]]:
         return store.rows("select * from benchmark_presets order by case id when 'small' then 1 when 'medium' then 2 when 'large' then 3 else 4 end")
 
-    def history(self) -> list[dict[str, Any]]:
-        return store.rows("select * from benchmark_runs order by started_at desc limit 100")
+    def history(
+        self,
+        model_id: str | None = None,
+        script_id: str | None = None,
+        preset_id: str | None = None,
+        active_only: bool = False,
+        limit: int = 7,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        where = []
+        params: list[Any] = []
+        if model_id:
+            where.append("b.model_id = ?")
+            params.append(model_id)
+        if script_id:
+            where.append("b.script_id = ?")
+            params.append(script_id)
+        if preset_id:
+            where.append("b.preset_id = ?")
+            params.append(preset_id)
+        if active_only:
+            where.append("b.status in ('running','queued')")
+        clause = f"where {' and '.join(where)}" if where else ""
+        limit = min(max(limit, 1), 50)
+        offset = max(offset, 0)
+        total = store.row(
+            f"""
+            select count(*) as n
+            from benchmark_runs b
+            left join models m on m.id = b.model_id
+            left join scripts s on s.id = b.script_id
+            {clause}
+            """,
+            params,
+        )
+        rows = store.rows(
+            f"""
+            select b.*, m.name as model_name, s.name as script_name
+            from benchmark_runs b
+            left join models m on m.id = b.model_id
+            left join scripts s on s.id = b.script_id
+            {clause}
+            order by b.started_at desc
+            limit ? offset ?
+            """,
+            [*params, limit, offset],
+        )
+        return {"items": rows, "total": (total or {}).get("n", 0), "limit": limit, "offset": offset}
 
     def start(self, script_id: str, preset_id: str, prompt: str | None = None, output_tokens: int | None = None) -> dict[str, Any]:
         script = store.row("select * from scripts where id=?", (script_id,))
@@ -58,15 +104,21 @@ class BenchmarkManager:
         started = time.time()
         first_token_at: float | None = None
         tokens = 0
-        raw_log: list[str] = []
+        raw_log: list[str] = [
+            f"> POST {url}",
+            f"> payload: {json.dumps({'prompt': prompt, 'n_predict': max_tokens, 'stream': True, 'timings_per_token': True, 'return_progress': True})}",
+        ]
+        store.execute("update benchmark_runs set raw_log=? where id=?", ("\n".join(raw_log), bench_id))
+        event_hub.publish_threadsafe("benchmark", store.row("select * from benchmark_runs where id=?", (bench_id,)) or {})
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
+                raw_log.append(f"< HTTP {response.status}")
                 for raw in response:
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line:
                         continue
                     data = self._parse_stream_json(line)
-                    raw_log.append(line)
+                    raw_log.append(f"< {line}")
                     content = data.get("content") if isinstance(data, dict) else None
                     timings = data.get("timings") if isinstance(data, dict) else None
                     if first_token_at is None and content:
@@ -81,7 +133,7 @@ class BenchmarkManager:
                         "prefill_tps": self._timing_value(timings, "prompt_per_second"),
                         "generation_tps": tokens / generation_elapsed if first_token_at else None,
                         "average_tps": tokens / elapsed,
-                        "raw_log": "\n".join(raw_log[-300:]),
+                        "raw_log": "\n".join(raw_log),
                     }
                     if timings:
                         metrics["generation_tps"] = self._timing_value(timings, "predicted_per_second") or metrics["generation_tps"]
@@ -96,6 +148,8 @@ class BenchmarkManager:
                 (duration, now(), bench_id),
             )
         except Exception as exc:
+            raw_log.append(f"! error: {exc}")
+            store.execute("update benchmark_runs set raw_log=? where id=?", ("\n".join(raw_log), bench_id))
             store.execute("update benchmark_runs set status='failed', error=?, ended_at=? where id=?", (str(exc), now(), bench_id))
         event_hub.publish_threadsafe("benchmark", store.row("select * from benchmark_runs where id=?", (bench_id,)) or {})
 

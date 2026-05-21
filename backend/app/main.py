@@ -333,8 +333,15 @@ def start_benchmark(body: BenchmarkIn) -> dict[str, Any]:
 
 
 @app.get("/api/benchmarks/history")
-def benchmark_history() -> list[dict[str, Any]]:
-    return benchmark_manager.history()
+def benchmark_history(
+    model_id: str | None = None,
+    script_id: str | None = None,
+    preset_id: str | None = None,
+    active_only: bool = False,
+    limit: int = 7,
+    offset: int = 0,
+) -> dict[str, Any]:
+    return benchmark_manager.history(model_id, script_id, preset_id, active_only, limit, offset)
 
 
 @app.websocket("/ws/events")

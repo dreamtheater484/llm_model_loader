@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -365,6 +365,13 @@ function Discover({ toast, reload, telemetry }) {
 }
 
 function Downloads({ downloads, reload, toast }) {
+  const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(0);
+  const pageSize = 7;
+  const activeStatuses = new Set(["queued", "running", "retrying"]);
+  const activeDownloads = downloads.filter((download) => activeStatuses.has(download.status));
+  const visibleDownloads = open ? downloads.slice(page * pageSize, page * pageSize + pageSize) : activeDownloads;
+  const pages = Math.max(1, Math.ceil(downloads.length / pageSize));
   async function cancel(download) {
     try {
       await request(`/api/downloads/${download.id}/cancel`, { method: "POST" });
@@ -388,11 +395,16 @@ function Downloads({ downloads, reload, toast }) {
       <div className="sectionTitle">
         <Download size={16} />
         <h2>Download Queue</h2>
+        <div className="spacer" />
+        <button className="subtle" onClick={() => setOpen(!open)}>
+          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {open ? "Hide history" : `Open history (${downloads.length})`}
+        </button>
       </div>
       <div className="table">
         <div className="thead downloadGrid"><span>File</span><span>Status</span><span>Progress</span><span>Transfer</span><span></span></div>
-        {!downloads.length && <div className="empty">No downloads yet.</div>}
-        {downloads.map((download) => {
+        {!visibleDownloads.length && <div className="empty">{open ? "No downloads yet." : "No active downloads."}</div>}
+        {visibleDownloads.map((download) => {
           const p = percent(download.bytes_done, download.bytes_total);
           return (
             <div className="row downloadGrid" key={download.id}>
@@ -408,6 +420,13 @@ function Downloads({ downloads, reload, toast }) {
           );
         })}
       </div>
+      {open && downloads.length > pageSize && (
+        <div className="pager">
+          <button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}>Previous</button>
+          <span>Page {page + 1} / {pages}</span>
+          <button onClick={() => setPage(Math.min(pages - 1, page + 1))} disabled={page >= pages - 1}>Next</button>
+        </div>
+      )}
     </section>
   );
 }
@@ -692,15 +711,59 @@ function Runs({ runs, reload, toast }) {
   );
 }
 
-function Benchmarks({ presets, history, models, reload, toast }) {
+function Benchmarks({ presets, models, reload, toast }) {
   const scripts = useMemo(() => models.flatMap((model) => (model.scripts || []).map((script) => ({ ...script, modelName: model.name }))), [models]);
   const [scriptId, setScriptId] = useState("");
   const [presetId, setPresetId] = useState("small");
+  const [history, setHistory] = useState([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [modelFilter, setModelFilter] = useState("");
+  const [scriptFilter, setScriptFilter] = useState("");
+  const [presetFilter, setPresetFilter] = useState("");
+  const pageSize = 7;
   const preset = presets.find((item) => item.id === presetId);
+  const terminalRef = useRef(null);
+  const runningBenchmark = history.find((item) => item.status === "running");
+  const filteredScripts = useMemo(() => scripts.filter((script) => !modelFilter || script.model_id === modelFilter), [scripts, modelFilter]);
+  const pages = Math.max(1, Math.ceil(historyTotal / pageSize));
+
+  const loadHistory = useCallback(async () => {
+    const params = new URLSearchParams({
+      active_only: String(!historyOpen),
+      limit: String(pageSize),
+      offset: String(historyOpen ? historyPage * pageSize : 0)
+    });
+    if (modelFilter) params.set("model_id", modelFilter);
+    if (scriptFilter) params.set("script_id", scriptFilter);
+    if (presetFilter) params.set("preset_id", presetFilter);
+    const data = await request(`/api/benchmarks/history?${params.toString()}`);
+    setHistory(data.items || []);
+    setHistoryTotal(data.total || 0);
+  }, [historyOpen, historyPage, modelFilter, scriptFilter, presetFilter]);
+
+  useEffect(() => {
+    loadHistory().catch((error) => toast(error.message));
+    const timer = window.setInterval(() => loadHistory().catch(() => {}), 2500);
+    return () => window.clearInterval(timer);
+  }, [loadHistory, toast]);
+
+  useEffect(() => {
+    setHistoryPage(0);
+  }, [historyOpen, modelFilter, scriptFilter, presetFilter]);
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    }
+  }, [runningBenchmark?.raw_log]);
+
   async function run() {
     try {
       await request("/api/benchmarks", { method: "POST", body: JSON.stringify({ script_id: scriptId, preset_id: presetId }) });
       reload();
+      loadHistory();
       toast("Benchmark started");
     } catch (error) {
       toast(error.message);
@@ -711,6 +774,11 @@ function Benchmarks({ presets, history, models, reload, toast }) {
       <div className="sectionTitle">
         <BarChart3 size={16} />
         <h2>Benchmark Dashboard</h2>
+        <div className="spacer" />
+        <button className="subtle" onClick={() => setHistoryOpen(!historyOpen)}>
+          {historyOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {historyOpen ? "Active only" : "Open history"}
+        </button>
       </div>
       <div className="toolbar wrap">
         <select value={scriptId} onChange={(event) => setScriptId(event.target.value)}>
@@ -723,12 +791,27 @@ function Benchmarks({ presets, history, models, reload, toast }) {
         <button className="primary" onClick={run} disabled={!scriptId}><Play size={14} /> Run</button>
       </div>
       {preset && <textarea className="promptPreview" readOnly value={preset.prompt} />}
+      <div className="toolbar compactFilters">
+        <select value={modelFilter} onChange={(event) => setModelFilter(event.target.value)}>
+          <option value="">All models</option>
+          {models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}
+        </select>
+        <select value={scriptFilter} onChange={(event) => setScriptFilter(event.target.value)}>
+          <option value="">All scripts</option>
+          {filteredScripts.map((script) => <option key={script.id} value={script.id}>{script.name}</option>)}
+        </select>
+        <select value={presetFilter} onChange={(event) => setPresetFilter(event.target.value)}>
+          <option value="">All presets</option>
+          {presets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+      </div>
       <div className="table">
-        <div className="thead benchGrid"><span>Preset</span><span>Status</span><span>FTTT</span><span>Prefill</span><span>Generation</span><span>Average</span></div>
-        {!history.length && <div className="empty">Benchmark history will appear here.</div>}
+        <div className="thead benchGrid"><span>Model</span><span>Preset</span><span>Status</span><span>FTTT</span><span>Prefill</span><span>Generation</span><span>Average</span></div>
+        {!history.length && <div className="empty">{historyOpen ? "No benchmark history matches these filters." : "No active benchmarks."}</div>}
         {history.map((item) => (
           <details className="benchItem" key={item.id}>
             <summary className="row benchGrid">
+              <strong title={item.script_name || "Script unavailable"}>{item.model_name || "unknown model"}</strong>
               <strong>{item.preset_id || "custom"}</strong>
               <Pill tone={item.status}>{item.status}</Pill>
               <span>{item.fttt_ms ? `${item.fttt_ms.toFixed(0)} ms` : "n/a"}</span>
@@ -740,6 +823,24 @@ function Benchmarks({ presets, history, models, reload, toast }) {
           </details>
         ))}
       </div>
+      {historyOpen && historyTotal > pageSize && (
+        <div className="pager">
+          <button onClick={() => setHistoryPage(Math.max(0, historyPage - 1))} disabled={historyPage === 0}>Previous</button>
+          <span>Page {historyPage + 1} / {pages}</span>
+          <button onClick={() => setHistoryPage(Math.min(pages - 1, historyPage + 1))} disabled={historyPage >= pages - 1}>Next</button>
+        </div>
+      )}
+      {runningBenchmark && (
+        <aside className="benchDrawer">
+          <div className="drawerHead">
+            <BarChart3 size={15} />
+            <strong>{runningBenchmark.model_name || "Benchmark"}</strong>
+            <Pill tone="running">running</Pill>
+          </div>
+          <small title={runningBenchmark.script_name || ""}>{runningBenchmark.script_name || "script unavailable"}</small>
+          <pre className="terminal drawerTerminal" ref={terminalRef}>{runningBenchmark.raw_log || "Waiting for benchmark traffic..."}</pre>
+        </aside>
+      )}
     </section>
   );
 }
@@ -751,7 +852,6 @@ function App() {
   const [downloads, setDownloads] = useState([]);
   const [runs, setRuns] = useState([]);
   const [presets, setPresets] = useState([]);
-  const [history, setHistory] = useState([]);
   const [toastText, setToastText] = useState("");
 
   const toast = useCallback((message) => {
@@ -760,14 +860,13 @@ function App() {
   }, []);
 
   const reload = useCallback(async () => {
-    const [settingsData, telemetryData, modelData, downloadData, runData, presetData, historyData] = await Promise.all([
+    const [settingsData, telemetryData, modelData, downloadData, runData, presetData] = await Promise.all([
       request("/api/settings"),
       request("/api/system/telemetry"),
       request("/api/models"),
       request("/api/downloads"),
       request("/api/runs"),
-      request("/api/benchmarks"),
-      request("/api/benchmarks/history")
+      request("/api/benchmarks")
     ]);
     setSettings(settingsData);
     setTelemetry(telemetryData);
@@ -775,7 +874,6 @@ function App() {
     setDownloads(downloadData);
     setRuns(runData);
     setPresets(presetData);
-    setHistory(historyData);
   }, []);
 
   useEffect(() => {
@@ -803,7 +901,7 @@ function App() {
             <ImportModel reload={reload} toast={toast} settings={settings} />
             <Downloads downloads={downloads} reload={reload} toast={toast} />
             <Runs runs={runs} reload={reload} toast={toast} />
-            <Benchmarks presets={presets} history={history} models={models} reload={reload} toast={toast} />
+            <Benchmarks presets={presets} models={models} reload={reload} toast={toast} />
           </div>
         </div>
       </main>

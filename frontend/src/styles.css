@@ -41,6 +41,12 @@ button.primary {
   border-color: #143a5a;
 }
 
+button.subtle {
+  min-height: 26px;
+  background: #f8fafc;
+  color: #344154;
+}
+
 input, select, textarea {
   width: 100%;
   border: 1px solid #c8d2dd;
@@ -445,7 +451,7 @@ h2 {
 }
 
 .benchGrid {
-  grid-template-columns: 1fr 80px 80px 100px 110px 90px;
+  grid-template-columns: minmax(130px, 1fr) 78px 78px 70px 92px 100px 85px;
 }
 
 .tagLine {
@@ -659,6 +665,50 @@ h2 {
   min-height: 74px;
   margin-bottom: 8px;
   background: #ffffff;
+}
+
+.compactFilters {
+  display: grid;
+  grid-template-columns: 1fr 1fr 130px;
+}
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  color: #667386;
+  font-size: 12px;
+}
+
+.benchDrawer {
+  position: fixed;
+  top: 74px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 20;
+  width: min(520px, calc(100vw - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #bfd0df;
+  border-radius: 8px;
+  background: #f8fafc;
+  box-shadow: 0 18px 48px rgba(20, 28, 38, 0.24);
+}
+
+.drawerHead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.drawerTerminal {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
 }
 
 .toast {
