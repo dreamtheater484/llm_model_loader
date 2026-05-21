@@ -1,0 +1,803 @@
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  Activity,
+  BarChart3,
+  Boxes,
+  ChevronUp,
+  Cpu,
+  Download,
+  ChevronDown,
+  ChevronRight,
+  FileArchive,
+  Folder,
+  FolderOpen,
+  Gauge,
+  HardDrive,
+  Home,
+  Play,
+  Plus,
+  Power,
+  RefreshCw,
+  Save,
+  Search,
+  Square,
+  Trash2,
+  Upload,
+  Zap
+} from "lucide-react";
+import "./styles.css";
+
+const API = "";
+
+async function request(path, options = {}) {
+  const response = await fetch(`${API}${path}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) }
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || response.statusText);
+  }
+  return response.json();
+}
+
+function formatBytes(value) {
+  if (!value && value !== 0) return "unknown";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = value;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size.toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function formatMib(value) {
+  if (!value && value !== 0) return "unknown";
+  return value >= 1024 ? `${(value / 1024).toFixed(1)} GB` : `${Math.round(value)} MiB`;
+}
+
+function formatDuration(seconds) {
+  if (!seconds && seconds !== 0) return "0s";
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  if (h) return `${h}h ${String(m).padStart(2, "0")}m ${String(s).padStart(2, "0")}s`;
+  if (m) return `${m}m ${String(s).padStart(2, "0")}s`;
+  return `${s}s`;
+}
+
+function percent(done, total) {
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, (done / total) * 100));
+}
+
+function compactLogTail(text) {
+  if (!text) return "";
+  const lines = text.split(/\r?\n/);
+  return lines.filter((line, index) => index === 0 || line !== lines[index - 1]).join("\n");
+}
+
+function Progress({ value }) {
+  return (
+    <div className="progress" aria-label="progress">
+      <span style={{ width: `${Math.max(2, value)}%` }} />
+    </div>
+  );
+}
+
+function Pill({ children, tone = "neutral" }) {
+  return <span className={`pill ${tone}`}>{children}</span>;
+}
+
+function IconButton({ icon: Icon, label, ...props }) {
+  return (
+    <button className="iconButton" title={label} aria-label={label} {...props}>
+      <Icon size={15} />
+    </button>
+  );
+}
+
+function TopTelemetry({ telemetry, refresh }) {
+  const gpu = telemetry?.gpus?.[0];
+  const used = gpu ? percent(gpu.memory_used_mib, gpu.memory_total_mib) : 0;
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <Boxes size={18} />
+        <div>
+          <strong>LLM Model Loader</strong>
+          <span>llama.cpp control surface</span>
+        </div>
+      </div>
+      <div className="metrics">
+        <div className="metric wide">
+          <HardDrive size={15} />
+          <div>
+            <label>{gpu?.name || "No NVIDIA GPU detected"}</label>
+            <b>{gpu ? `${formatMib(gpu.memory_free_mib)} free / ${formatMib(gpu.memory_total_mib)}` : "Unavailable"}</b>
+            <Progress value={used} />
+          </div>
+        </div>
+        <div className="metric">
+          <Zap size={15} />
+          <label>GPU</label>
+          <b>{gpu?.power_draw_w ? `${gpu.power_draw_w.toFixed(1)} W` : "n/a"}</b>
+        </div>
+        <div className="metric">
+          <Gauge size={15} />
+          <label>Util</label>
+          <b>{gpu?.utilization_gpu_percent ?? 0}%</b>
+        </div>
+        <div className="metric">
+          <Cpu size={15} />
+          <label>CPU</label>
+          <b>{telemetry?.cpu_load_percent == null ? "n/a" : `${telemetry.cpu_load_percent.toFixed(0)}%`}</b>
+        </div>
+        <div className="metric">
+          <Activity size={15} />
+          <label>Models</label>
+          <b>{telemetry?.loaded_models || 0} live / {telemetry?.loading_models || 0} loading</b>
+        </div>
+      </div>
+      <IconButton icon={RefreshCw} label="Refresh telemetry" onClick={refresh} />
+    </header>
+  );
+}
+
+function Settings({ settings, setSettings, toast }) {
+  const [draft, setDraft] = useState(settings);
+  const [browser, setBrowser] = useState(null);
+  const [openBrowser, setOpenBrowser] = useState(false);
+  const [message, setMessage] = useState("");
+  useEffect(() => setDraft(settings), [settings]);
+
+  async function save() {
+    const updated = await request("/api/settings", { method: "PATCH", body: JSON.stringify(draft) });
+    setSettings(updated);
+    toast("Settings saved");
+  }
+
+  async function discover() {
+    try {
+      const discovered = await request("/api/llamacpp/discover");
+      if (discovered.selected) {
+        const updated = { ...draft, llama_server_path: discovered.selected };
+        setDraft(updated);
+        setSettings({ ...settings, llama_server_path: discovered.selected });
+        setMessage(`Found ${discovered.selected}`);
+        toast("llama.cpp path discovered");
+      } else {
+        setMessage("No llama-server.exe found.");
+      }
+    } catch (error) {
+      setMessage(error.message);
+      toast(error.message);
+    }
+  }
+
+  async function loadBrowser(nextPath) {
+    try {
+      const query = nextPath ? `?path=${encodeURIComponent(nextPath)}&gguf_only=false&executable_only=true` : "?gguf_only=false&executable_only=true";
+      setBrowser(await request(`/api/files/browse${query}`));
+      setOpenBrowser(true);
+    } catch (error) {
+      setMessage(error.message);
+      toast(error.message);
+    }
+  }
+
+  function selectExecutable(path) {
+    setDraft({ ...draft, llama_server_path: path });
+    setOpenBrowser(false);
+    setMessage(`Selected ${path}`);
+  }
+
+  return (
+    <section className="band settingsPanel">
+      <div className="settingsBand">
+        <div className="sectionTitle">
+          <Power size={16} />
+          <h2>Runtime Settings</h2>
+        </div>
+        <input value={draft.llama_server_path || ""} onChange={(event) => setDraft({ ...draft, llama_server_path: event.target.value })} placeholder="Path to llama-server.exe" />
+        <input value={draft.model_dir || ""} onChange={(event) => setDraft({ ...draft, model_dir: event.target.value })} placeholder="Managed model directory" />
+        <button onClick={discover}><Search size={14} /> Auto</button>
+        <button onClick={() => loadBrowser(draft.llama_server_path ? draft.llama_server_path.replace(/\\[^\\]*$/, "") : "")}><FolderOpen size={14} /> Browse</button>
+        <button className="primary" onClick={save}><Save size={14} /> Save</button>
+      </div>
+      {message && <div className="settingsMessage">{message}</div>}
+      {openBrowser && (
+        <div className="browserShell runtimeBrowser">
+          <div className="browserChrome">
+            <button onClick={() => loadBrowser(browser?.parent)} disabled={!browser?.parent}><ChevronUp size={14} /> Up</button>
+            <button onClick={() => loadBrowser("C:\\Users\\Roy\\AI")}><Home size={14} /> AI</button>
+            <input value={browser?.path || ""} onChange={(event) => setBrowser({ ...(browser || {}), path: event.target.value })} onKeyDown={(event) => event.key === "Enter" && loadBrowser(event.currentTarget.value)} />
+            <button onClick={() => loadBrowser(browser?.path)}><FolderOpen size={14} /> Open</button>
+          </div>
+          <div className="shortcutStrip">
+            {(browser?.roots || []).map((root) => <button key={root.path} onClick={() => loadBrowser(root.path)}>{root.name}</button>)}
+            {(browser?.shortcuts || []).map((shortcut) => <button key={shortcut.path} onClick={() => loadBrowser(shortcut.path)}>{shortcut.name}</button>)}
+          </div>
+          <div className="fileBrowser compact">
+            {!browser?.entries?.length && <div className="empty">No llama-server.exe in this folder.</div>}
+            {browser?.entries?.map((entry) => (
+              <button
+                className="fileEntry"
+                key={entry.path}
+                onClick={() => entry.type === "directory" ? loadBrowser(entry.path) : selectExecutable(entry.path)}
+              >
+                {entry.type === "directory" ? <Folder size={15} /> : <Power size={15} />}
+                <span>{entry.name}</span>
+                {entry.type === "file" && <small>llama-server</small>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Discover({ toast, reload, telemetry }) {
+  const [q, setQ] = useState("Qwen GGUF");
+  const [results, setResults] = useState([]);
+  const [files, setFiles] = useState({});
+  const [expanded, setExpanded] = useState({});
+  const [loadingFiles, setLoadingFiles] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [resultsCollapsed, setResultsCollapsed] = useState(true);
+
+  async function search() {
+    setLoading(true);
+    try {
+      setResults(await request(`/api/hf/search?q=${encodeURIComponent(q)}&limit=20`));
+      setResultsCollapsed(false);
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadFiles(repo) {
+    if (expanded[repo]) {
+      setExpanded({ ...expanded, [repo]: false });
+      return;
+    }
+    setExpanded({ ...expanded, [repo]: true });
+    if (files[repo]) return;
+    setLoadingFiles({ ...loadingFiles, [repo]: true });
+    try {
+      setFiles({ ...files, [repo]: await request(`/api/hf/models/${repo}/files`) });
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      setLoadingFiles((current) => ({ ...current, [repo]: false }));
+    }
+  }
+
+  async function download(repo, filename) {
+    try {
+      await request("/api/downloads", { method: "POST", body: JSON.stringify({ repo_id: repo, filename }) });
+      toast("Download queued");
+      reload();
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+
+  function fitLabel(file) {
+    const freeMib = telemetry?.gpus?.[0]?.memory_free_mib;
+    if (!file.estimated_vram_mib || !freeMib) return "VRAM estimate unknown";
+    return file.estimated_vram_mib + 1024 <= freeMib ? "fits current VRAM" : "exceeds free VRAM";
+  }
+
+  function fitTone(file) {
+    const freeMib = telemetry?.gpus?.[0]?.memory_free_mib;
+    if (!file.estimated_vram_mib || !freeMib) return "neutral";
+    return file.estimated_vram_mib + 1024 <= freeMib ? "completed" : "failed";
+  }
+
+  return (
+    <section className="band discoveryBand">
+      <div className="sectionTitle">
+        <Search size={16} />
+        <h2>Hugging Face Discovery</h2>
+      </div>
+      <div className="toolbar">
+        <input value={q} onChange={(event) => setQ(event.target.value)} onKeyDown={(event) => event.key === "Enter" && search()} placeholder="Search GGUF models" />
+        <button className="primary" onClick={search}><Search size={14} /> Search</button>
+        {!!results.length && (
+          <button className="collapseButton" onClick={() => setResultsCollapsed(!resultsCollapsed)}>
+            {resultsCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+            {resultsCollapsed ? "Show results" : "Hide results"}
+          </button>
+        )}
+      </div>
+      {!resultsCollapsed && <div className="table">
+        <div className="thead repoGrid"><span>Repository</span><span>Stats</span><span>Tags</span><span>Action</span></div>
+        {loading && <div className="empty">Searching Hugging Face...</div>}
+        {results.map((result) => (
+          <React.Fragment key={result.repo_id}>
+            <div className="row repoGrid">
+              <strong>{result.repo_id}</strong>
+              <span>{result.downloads} downloads / {result.likes} likes</span>
+              <span className="tagLine">{(result.tags || []).slice(0, 4).map((tag) => <Pill key={tag}>{tag}</Pill>)}</span>
+              <button className="primary openRepoButton" onClick={() => loadFiles(result.repo_id)}>
+                {expanded[result.repo_id] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                {expanded[result.repo_id] ? "Close" : "Open"}
+              </button>
+            </div>
+            {expanded[result.repo_id] && (
+              <div className="variantPanel">
+                <div className="variantHead fileGrid">
+                  <span>Version</span>
+                  <span>Quant</span>
+                  <span>Size</span>
+                  <span>VRAM</span>
+                  <span></span>
+                </div>
+                {loadingFiles[result.repo_id] && <div className="empty">Loading GGUF variants...</div>}
+                {!loadingFiles[result.repo_id] && !files[result.repo_id]?.length && <div className="empty">No GGUF files found for this repository.</div>}
+                {files[result.repo_id]?.map((file) => (
+                  <div className="row fileGrid" key={`${result.repo_id}-${file.filename}`}>
+                    <span>{file.filename}</span>
+                    <span>{file.quantization || "unknown"}</span>
+                    <strong>{formatBytes(file.size_bytes)}</strong>
+                    <span className="vramEstimate">
+                      {file.estimated_vram_mib ? formatMib(file.estimated_vram_mib) : "unknown"}
+                      <Pill tone={fitTone(file)}>{fitLabel(file)}</Pill>
+                    </span>
+                    <button className="primary" onClick={() => download(result.repo_id, file.filename)}><Download size={14} /> Download</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </React.Fragment>
+        ))}
+      </div>}
+    </section>
+  );
+}
+
+function Downloads({ downloads, reload, toast }) {
+  async function cancel(download) {
+    try {
+      await request(`/api/downloads/${download.id}/cancel`, { method: "POST" });
+      reload();
+      toast("Download cancellation requested");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  return (
+    <section className="band">
+      <div className="sectionTitle">
+        <Download size={16} />
+        <h2>Download Queue</h2>
+      </div>
+      <div className="table">
+        <div className="thead downloadGrid"><span>File</span><span>Status</span><span>Progress</span><span>Transfer</span><span></span></div>
+        {!downloads.length && <div className="empty">No downloads yet.</div>}
+        {downloads.map((download) => {
+          const p = percent(download.bytes_done, download.bytes_total);
+          return (
+            <div className="row downloadGrid" key={download.id}>
+              <strong>{download.filename}</strong>
+              <Pill tone={download.status}>{download.status}</Pill>
+              <div><Progress value={p} /><small>{p.toFixed(1)}% done / {(100 - p).toFixed(1)}% left</small></div>
+              <span>{formatBytes(download.bytes_done)} / {formatBytes(download.bytes_total)}</span>
+              <span>{["queued", "running"].includes(download.status) && <button onClick={() => cancel(download)}><Square size={14} /> Cancel</button>}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function ImportModel({ reload, toast, settings }) {
+  const [path, setPath] = useState("");
+  const [name, setName] = useState("");
+  const [manual, setManual] = useState("");
+  const [browser, setBrowser] = useState(null);
+  const [copyToManaged, setCopyToManaged] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState("");
+
+  const loadBrowser = useCallback(async (nextPath) => {
+    try {
+      setImportMessage("");
+      const query = nextPath ? `?path=${encodeURIComponent(nextPath)}` : "";
+      const data = await request(`/api/files/browse${query}`);
+      setBrowser(data);
+    } catch (error) {
+      setImportMessage(error.message);
+      toast(error.message);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    loadBrowser(settings?.model_dir || "");
+  }, [loadBrowser, settings?.model_dir]);
+
+  async function submit() {
+    await importSelected(path);
+  }
+
+  async function importSelected(selectedPath) {
+    if (!selectedPath) {
+      setImportMessage("Select a GGUF file first.");
+      return;
+    }
+    if (!path) {
+      setPath(selectedPath);
+    }
+    setImporting(true);
+    setImportMessage(copyToManaged ? "Copying model into the managed library..." : "Registering selected model...");
+    try {
+      const imported = await request("/api/models", {
+        method: "POST",
+        body: JSON.stringify({ path: selectedPath, name: name || null, manual_vram_mib: manual ? Number(manual) : null, copy_to_managed: copyToManaged })
+      });
+      setPath("");
+      setName("");
+      setManual("");
+      const message = imported.already_exists ? "That model is already in the library." : "Model imported.";
+      setImportMessage(message);
+      reload();
+      toast(message);
+    } catch (error) {
+      setImportMessage(error.message);
+      toast(error.message);
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  return (
+    <section className="band">
+      <div className="sectionTitle">
+        <Upload size={16} />
+        <h2>Import Existing Model</h2>
+      </div>
+      <div className="browserShell">
+        <div className="browserChrome">
+          <button onClick={() => loadBrowser(browser?.parent)} disabled={!browser?.parent}><ChevronUp size={14} /> Up</button>
+          <button onClick={() => loadBrowser(settings?.model_dir)}><Home size={14} /> Models</button>
+          <input value={browser?.path || ""} onChange={(event) => setBrowser({ ...(browser || {}), path: event.target.value })} onKeyDown={(event) => event.key === "Enter" && loadBrowser(event.currentTarget.value)} />
+          <button onClick={() => loadBrowser(browser?.path)}><FolderOpen size={14} /> Open</button>
+        </div>
+        <div className="shortcutStrip">
+          {(browser?.roots || []).map((root) => (
+            <button key={root.path} onClick={() => loadBrowser(root.path)}>{root.name}</button>
+          ))}
+          {(browser?.shortcuts || []).map((shortcut) => (
+            <button key={shortcut.path} onClick={() => loadBrowser(shortcut.path)}>{shortcut.name}</button>
+          ))}
+        </div>
+        {browser?.error && <div className="inlineError">{browser.error}</div>}
+        <div className="fileBrowser">
+          {!browser?.entries?.length && <div className="empty">No GGUF files in this folder.</div>}
+          {browser?.entries?.map((entry) => (
+            <button
+              className={`fileEntry ${entry.path === path ? "selected" : ""}`}
+              key={entry.path}
+              onClick={() => entry.type === "directory" ? loadBrowser(entry.path) : (setPath(entry.path), setImportMessage(""))}
+              onDoubleClick={() => entry.type === "directory" ? loadBrowser(entry.path) : importSelected(entry.path)}
+            >
+              {entry.type === "directory" ? <Folder size={15} /> : <FileArchive size={15} />}
+              <span>{entry.name}</span>
+              {entry.type === "file" && <small>{entry.quantization || "GGUF"} / {formatBytes(entry.size_bytes)}</small>}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className={`selectedFile ${path ? "ready" : ""}`}>
+        <FileArchive size={14} />
+        <span>{path || "No GGUF file selected. Open folders above, then select a .gguf row."}</span>
+      </div>
+      {importMessage && <div className={`importMessage ${importMessage.includes("imported") ? "ok" : ""}`}>{importMessage}</div>}
+      <div className="toolbar wrap">
+        <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="Selected .gguf file" />
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional display name" />
+        <input value={manual} onChange={(event) => setManual(event.target.value)} placeholder="Manual VRAM MiB" />
+        <label className="checkLine"><input type="checkbox" checked={copyToManaged} onChange={(event) => setCopyToManaged(event.target.checked)} /> Copy into managed library (slower)</label>
+        <button className="primary" onClick={submit} disabled={!path || importing}><Plus size={14} /> {importing ? "Importing" : "Import"}</button>
+      </div>
+    </section>
+  );
+}
+
+function ScriptEditor({ model, reload, toast }) {
+  const template = `-m "${model.path}" \`
+  --alias "${model.name}" \`
+  --host 127.0.0.1 \`
+  --port 8080 \`
+  -c 32768 \`
+  -ngl 99 \`
+  -fa on \`
+  --log-verbosity 1`;
+  const [raw, setRaw] = useState(template);
+  const [name, setName] = useState("");
+  const [estimate, setEstimate] = useState("");
+  async function save() {
+    try {
+      await request(`/api/models/${model.id}/scripts`, {
+        method: "POST",
+        body: JSON.stringify({ name: name || null, raw_script: raw, estimated_vram_mib: estimate ? Number(estimate) : null })
+      });
+      setName("");
+      reload();
+      toast("Script saved");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  return (
+    <details className="scriptEditor">
+      <summary><Plus size={14} /> Add loading script</summary>
+      <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional script name, otherwise autosuggested" />
+      <textarea value={raw} onChange={(event) => setRaw(event.target.value)} />
+      <div className="toolbar">
+        <input value={estimate} onChange={(event) => setEstimate(event.target.value)} placeholder="Optional VRAM estimate MiB" />
+        <button className="primary" onClick={save}><Save size={14} /> Save script</button>
+      </div>
+    </details>
+  );
+}
+
+function Library({ models, reload, toast }) {
+  async function remove(model) {
+    if (!confirm(`Physically delete ${model.name}?`)) return;
+    try {
+      await request(`/api/models/${model.id}`, { method: "DELETE" });
+      reload();
+      toast("Model deleted");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  async function start(scriptId) {
+    try {
+      await request("/api/runs/start", { method: "POST", body: JSON.stringify({ script_id: scriptId }) });
+      reload();
+      toast("Loading started");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  async function removeScript(model, script) {
+    if (!confirm(`Delete loading script ${script.name}?`)) return;
+    try {
+      await request(`/api/models/${model.id}/scripts/${script.id}`, { method: "DELETE" });
+      reload();
+      toast("Script deleted");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  return (
+    <section className="band">
+      <div className="sectionTitle">
+        <HardDrive size={16} />
+        <h2>Model Library</h2>
+      </div>
+      {!models.length && <div className="empty">Downloaded and imported models will appear here.</div>}
+      {models.map((model) => (
+        <div className="modelBlock" key={model.id}>
+          <div className="modelHead">
+            <div>
+              <strong>{model.name}</strong>
+              <span>{model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)} / {model.path}</span>
+            </div>
+            <IconButton icon={Trash2} label="Delete model" onClick={() => remove(model)} />
+          </div>
+          <div className="scripts">
+            {model.scripts?.map((script) => (
+              <div className="scriptRow" key={script.id}>
+                <div>
+                  <strong>{script.name}</strong>
+                  <span>{script.parsed_json?.ctx_size || "auto"} ctx / {script.parsed_json?.quantization || model.quantization || "quant?"} / {formatMib(script.estimated_vram_mib)} estimated</span>
+                </div>
+                <button className="primary" onClick={() => start(script.id)}><Play size={14} /> Start</button>
+                <IconButton icon={Trash2} label="Delete script" onClick={() => removeScript(model, script)} />
+              </div>
+            ))}
+          </div>
+          <ScriptEditor model={model} reload={reload} toast={toast} />
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function Runs({ runs, reload, toast }) {
+  const deletableStatuses = new Set(["aborted", "failed", "unloaded", "exited"]);
+  function statusMessage(run) {
+    if (run.status_message) return run.status_message;
+    if (run.status === "failed" && run.error) return run.error;
+    if (run.status === "aborted") return "Aborted: llama.cpp process was stopped.";
+    if (run.status === "unloaded") return "Unloaded: llama.cpp process was stopped.";
+    if (run.status === "loaded") return "Loaded: llama.cpp server is running.";
+    if (run.status === "loading") return "Loading: waiting for llama.cpp startup output and health check.";
+    return "Waiting for llama.cpp status...";
+  }
+  async function action(run, kind) {
+    try {
+      await request(`/api/runs/${run.id}/${kind}`, { method: "POST" });
+      reload();
+      toast(kind === "abort" ? "Run aborted" : "Run unloaded");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  async function remove(run) {
+    if (!confirm("Delete this terminal session from history?")) return;
+    try {
+      await request(`/api/runs/${run.id}`, { method: "DELETE" });
+      reload();
+      toast("Run history deleted");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  return (
+    <section className="band">
+      <div className="sectionTitle">
+        <Activity size={16} />
+        <h2>Active Runs & Terminal</h2>
+      </div>
+      {!runs.length && <div className="empty">No process history yet.</div>}
+      {runs.map((run) => {
+        const elapsed = run.ended_at ? run.ended_at - run.started_at : Date.now() / 1000 - run.started_at;
+        const message = statusMessage(run);
+        const terminalText = compactLogTail(run.log_tail) || `[loader] ${message}`;
+        return (
+          <div className="runBlock" key={run.id}>
+            <div className="runHead">
+              <Pill tone={run.status}>{run.status}</Pill>
+              <span>PID {run.pid || "n/a"} / {run.host}:{run.port}</span>
+              <span className="elapsed">elapsed {formatDuration(elapsed)}</span>
+              <div className="spacer" />
+              {["loading", "orphaned"].includes(run.status) && <button onClick={() => action(run, "abort")}><Square size={14} /> Abort</button>}
+              {run.status === "loaded" && <button onClick={() => action(run, "unload")}><Square size={14} /> Unload</button>}
+              {deletableStatuses.has(run.status) && <IconButton icon={Trash2} label="Delete terminal history" onClick={() => remove(run)} />}
+            </div>
+            <div className={`runStatusLine ${run.status}`}>
+              <span className="statusDot" />
+              <span>{message}</span>
+            </div>
+            <pre className="terminal">{terminalText}</pre>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function Benchmarks({ presets, history, models, reload, toast }) {
+  const scripts = useMemo(() => models.flatMap((model) => (model.scripts || []).map((script) => ({ ...script, modelName: model.name }))), [models]);
+  const [scriptId, setScriptId] = useState("");
+  const [presetId, setPresetId] = useState("small");
+  const preset = presets.find((item) => item.id === presetId);
+  async function run() {
+    try {
+      await request("/api/benchmarks", { method: "POST", body: JSON.stringify({ script_id: scriptId, preset_id: presetId }) });
+      reload();
+      toast("Benchmark started");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  return (
+    <section className="band">
+      <div className="sectionTitle">
+        <BarChart3 size={16} />
+        <h2>Benchmark Dashboard</h2>
+      </div>
+      <div className="toolbar wrap">
+        <select value={scriptId} onChange={(event) => setScriptId(event.target.value)}>
+          <option value="">Select loaded script version</option>
+          {scripts.map((script) => <option key={script.id} value={script.id}>{script.modelName} / {script.name}</option>)}
+        </select>
+        <select value={presetId} onChange={(event) => setPresetId(event.target.value)}>
+          {presets.map((item) => <option key={item.id} value={item.id}>{item.name}: {item.prompt_tokens} in / {item.output_tokens} out</option>)}
+        </select>
+        <button className="primary" onClick={run} disabled={!scriptId}><Play size={14} /> Run</button>
+      </div>
+      {preset && <textarea className="promptPreview" readOnly value={preset.prompt} />}
+      <div className="table">
+        <div className="thead benchGrid"><span>Preset</span><span>Status</span><span>FTTT</span><span>Prefill</span><span>Generation</span><span>Average</span></div>
+        {!history.length && <div className="empty">Benchmark history will appear here.</div>}
+        {history.map((item) => (
+          <details className="benchItem" key={item.id}>
+            <summary className="row benchGrid">
+              <strong>{item.preset_id || "custom"}</strong>
+              <Pill tone={item.status}>{item.status}</Pill>
+              <span>{item.fttt_ms ? `${item.fttt_ms.toFixed(0)} ms` : "n/a"}</span>
+              <span>{item.prefill_tps ? `${item.prefill_tps.toFixed(2)} tok/s` : "n/a"}</span>
+              <span>{item.generation_tps ? `${item.generation_tps.toFixed(2)} tok/s` : "n/a"}</span>
+              <span>{item.average_tps ? `${item.average_tps.toFixed(2)} tok/s` : "n/a"}</span>
+            </summary>
+            <pre className="terminal small">{item.raw_log || "No benchmark log captured yet."}</pre>
+          </details>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function App() {
+  const [settings, setSettings] = useState({});
+  const [telemetry, setTelemetry] = useState(null);
+  const [models, setModels] = useState([]);
+  const [downloads, setDownloads] = useState([]);
+  const [runs, setRuns] = useState([]);
+  const [presets, setPresets] = useState([]);
+  const [history, setHistory] = useState([]);
+  const [toastText, setToastText] = useState("");
+
+  const toast = useCallback((message) => {
+    setToastText(message);
+    window.setTimeout(() => setToastText(""), 3000);
+  }, []);
+
+  const reload = useCallback(async () => {
+    const [settingsData, telemetryData, modelData, downloadData, runData, presetData, historyData] = await Promise.all([
+      request("/api/settings"),
+      request("/api/system/telemetry"),
+      request("/api/models"),
+      request("/api/downloads"),
+      request("/api/runs"),
+      request("/api/benchmarks"),
+      request("/api/benchmarks/history")
+    ]);
+    setSettings(settingsData);
+    setTelemetry(telemetryData);
+    setModels(modelData);
+    setDownloads(downloadData);
+    setRuns(runData);
+    setPresets(presetData);
+    setHistory(historyData);
+  }, []);
+
+  useEffect(() => {
+    reload().catch((error) => toast(error.message));
+    const timer = window.setInterval(() => reload().catch(() => {}), 5000);
+    const ws = new WebSocket(`ws://${window.location.host}/ws/events`);
+    ws.onmessage = () => reload().catch(() => {});
+    return () => {
+      window.clearInterval(timer);
+      ws.close();
+    };
+  }, [reload, toast]);
+
+  return (
+    <>
+      <TopTelemetry telemetry={telemetry} refresh={() => reload().catch((error) => toast(error.message))} />
+      <main>
+        <Settings settings={settings} setSettings={setSettings} toast={toast} />
+        <div className="grid two dashboardGrid">
+          <div className="stack">
+            <Discover toast={toast} reload={reload} telemetry={telemetry} />
+            <Library models={models} reload={reload} toast={toast} />
+          </div>
+          <div className="stack">
+            <ImportModel reload={reload} toast={toast} settings={settings} />
+            <Downloads downloads={downloads} reload={reload} toast={toast} />
+            <Runs runs={runs} reload={reload} toast={toast} />
+            <Benchmarks presets={presets} history={history} models={models} reload={reload} toast={toast} />
+          </div>
+        </div>
+      </main>
+      {toastText && <div className="toast">{toastText}</div>}
+    </>
+  );
+}
+
+createRoot(document.getElementById("root")).render(<App />);
