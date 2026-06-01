@@ -240,6 +240,11 @@ h2 {
   flex: 1;
 }
 
+.toolbar.wrap .tokenInput {
+  flex: 0 0 108px;
+  min-width: 108px;
+}
+
 .checkLine {
   display: inline-flex;
   align-items: center;
@@ -451,7 +456,7 @@ h2 {
 }
 
 .benchGrid {
-  grid-template-columns: minmax(130px, 1fr) 78px 78px 70px 92px 100px 85px;
+  grid-template-columns: minmax(160px, 1fr) 78px 78px 70px 92px 100px 85px;
 }
 
 .tagLine {
@@ -540,10 +545,22 @@ h2 {
   margin: 7px 0;
 }
 
+.scriptItem {
+  border-left: 3px solid #d7dee8;
+}
+
+.scriptItem + .scriptItem {
+  margin-top: 4px;
+}
+
+.scriptItem.editing {
+  border-left-color: #2c7da0;
+  background: #f6fafc;
+}
+
 .scriptRow {
   min-height: 38px;
   padding: 5px 0 5px 12px;
-  border-left: 3px solid #d7dee8;
 }
 
 .scriptEditor {
@@ -561,6 +578,27 @@ h2 {
 
 .scriptEditor input, .scriptEditor textarea {
   margin-bottom: 7px;
+}
+
+.scriptEditPanel {
+  display: grid;
+  gap: 7px;
+  padding: 0 0 8px 12px;
+}
+
+.scriptEditPanel textarea {
+  min-height: 150px;
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.scriptEditPanel .toolbar {
+  margin-bottom: 0;
+}
+
+.scriptEditPanel .toolbar input {
+  max-width: 320px;
 }
 
 .runHead {
@@ -667,6 +705,48 @@ h2 {
   background: #ffffff;
 }
 
+.selectionHint {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 26px;
+  margin: -2px 0 8px;
+  padding: 4px 7px;
+  border: 1px solid #bbdfc5;
+  border-radius: 6px;
+  color: #235b33;
+  background: #ecf8ef;
+  font-size: 12px;
+}
+
+.selectionHint span,
+.benchModel small,
+.benchModel strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selectionHint span {
+  color: #4b684f;
+}
+
+.inlineEmpty {
+  margin: -2px 0 8px;
+  border: 1px solid #dbe2ea;
+}
+
+.benchModel {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.benchModel small {
+  color: #667386;
+  font-size: 11px;
+}
+
 .compactFilters {
   display: grid;
   grid-template-columns: 1fr 1fr 130px;
@@ -680,35 +760,6 @@ h2 {
   padding-top: 8px;
   color: #667386;
   font-size: 12px;
-}
-
-.benchDrawer {
-  position: fixed;
-  top: 74px;
-  right: 12px;
-  bottom: 12px;
-  z-index: 20;
-  width: min(520px, calc(100vw - 24px));
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid #bfd0df;
-  border-radius: 8px;
-  background: #f8fafc;
-  box-shadow: 0 18px 48px rgba(20, 28, 38, 0.24);
-}
-
-.drawerHead {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.drawerTerminal {
-  flex: 1;
-  max-height: none;
-  min-height: 0;
 }
 
 .toast {

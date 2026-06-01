@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
@@ -15,6 +15,7 @@ import {
   Gauge,
   HardDrive,
   Home,
+  Pencil,
   Play,
   Plus,
   Power,
@@ -24,6 +25,7 @@ import {
   Square,
   Trash2,
   Upload,
+  X,
   Zap
 } from "lucide-react";
 import "./styles.css";
@@ -582,6 +584,67 @@ function ScriptEditor({ model, reload, toast }) {
   );
 }
 
+function SavedScript({ model, script, start, removeScript, reload, toast }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(script.name || "");
+  const [raw, setRaw] = useState(script.raw_script || "");
+  const [estimate, setEstimate] = useState(script.estimated_vram_mib ? String(script.estimated_vram_mib) : "");
+  const [saving, setSaving] = useState(false);
+
+  function reset() {
+    setName(script.name || "");
+    setRaw(script.raw_script || "");
+    setEstimate(script.estimated_vram_mib ? String(script.estimated_vram_mib) : "");
+    setEditing(false);
+  }
+
+  async function save() {
+    try {
+      setSaving(true);
+      await request(`/api/models/${model.id}/scripts/${script.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: name || null,
+          raw_script: raw,
+          estimated_vram_mib: estimate ? Number(estimate) : null
+        })
+      });
+      setEditing(false);
+      reload();
+      toast("Script updated");
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className={`scriptItem ${editing ? "editing" : ""}`}>
+      <div className="scriptRow">
+        <div>
+          <strong>{script.name}</strong>
+          <span>{script.parsed_json?.ctx_size || "auto"} ctx / {script.parsed_json?.quantization || model.quantization || "quant?"} / {formatMib(script.estimated_vram_mib)} estimated</span>
+        </div>
+        <button className="primary" onClick={() => start(script.id)} disabled={editing}><Play size={14} /> Start</button>
+        <button className="subtle" onClick={() => setEditing(true)} disabled={editing}><Pencil size={14} /> Edit</button>
+        <IconButton icon={Trash2} label="Delete script" onClick={() => removeScript(model, script)} disabled={editing} />
+      </div>
+      {editing && (
+        <div className="scriptEditPanel">
+          <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional script name, otherwise autosuggested" />
+          <textarea value={raw} onChange={(event) => setRaw(event.target.value)} />
+          <div className="toolbar">
+            <input value={estimate} onChange={(event) => setEstimate(event.target.value)} placeholder="Optional VRAM estimate MiB" />
+            <button className="primary" onClick={save} disabled={!raw || saving}><Save size={14} /> {saving ? "Saving" : "Save"}</button>
+            <button className="subtle" onClick={reset}><X size={14} /> Cancel</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Library({ models, reload, toast }) {
   async function remove(model) {
     if (!confirm(`Physically delete ${model.name}?`)) return;
@@ -630,14 +693,15 @@ function Library({ models, reload, toast }) {
           </div>
           <div className="scripts">
             {model.scripts?.map((script) => (
-              <div className="scriptRow" key={script.id}>
-                <div>
-                  <strong>{script.name}</strong>
-                  <span>{script.parsed_json?.ctx_size || "auto"} ctx / {script.parsed_json?.quantization || model.quantization || "quant?"} / {formatMib(script.estimated_vram_mib)} estimated</span>
-                </div>
-                <button className="primary" onClick={() => start(script.id)}><Play size={14} /> Start</button>
-                <IconButton icon={Trash2} label="Delete script" onClick={() => removeScript(model, script)} />
-              </div>
+              <SavedScript
+                key={script.id}
+                model={model}
+                script={script}
+                start={start}
+                removeScript={removeScript}
+                reload={reload}
+                toast={toast}
+              />
             ))}
           </div>
           <ScriptEditor model={model} reload={reload} toast={toast} />
@@ -711,10 +775,14 @@ function Runs({ runs, reload, toast }) {
   );
 }
 
-function Benchmarks({ presets, models, reload, toast }) {
+function Benchmarks({ presets, models, runs, reload, toast }) {
   const scripts = useMemo(() => models.flatMap((model) => (model.scripts || []).map((script) => ({ ...script, modelName: model.name }))), [models]);
+  const loadedScriptIds = useMemo(() => new Set(runs.filter((run) => run.status === "loaded").map((run) => run.script_id)), [runs]);
+  const loadedScripts = useMemo(() => scripts.filter((script) => loadedScriptIds.has(script.id)), [scripts, loadedScriptIds]);
   const [scriptId, setScriptId] = useState("");
   const [presetId, setPresetId] = useState("small");
+  const [prompt, setPrompt] = useState("");
+  const [outputTokens, setOutputTokens] = useState("");
   const [history, setHistory] = useState([]);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -724,10 +792,9 @@ function Benchmarks({ presets, models, reload, toast }) {
   const [presetFilter, setPresetFilter] = useState("");
   const pageSize = 7;
   const preset = presets.find((item) => item.id === presetId);
-  const terminalRef = useRef(null);
-  const runningBenchmark = history.find((item) => item.status === "running");
   const filteredScripts = useMemo(() => scripts.filter((script) => !modelFilter || script.model_id === modelFilter), [scripts, modelFilter]);
   const pages = Math.max(1, Math.ceil(historyTotal / pageSize));
+  const selectedScript = loadedScripts.find((script) => script.id === scriptId);
 
   const loadHistory = useCallback(async () => {
     const params = new URLSearchParams({
@@ -754,14 +821,32 @@ function Benchmarks({ presets, models, reload, toast }) {
   }, [historyOpen, modelFilter, scriptFilter, presetFilter]);
 
   useEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+    if (!preset) return;
+    setPrompt(preset.prompt || "");
+    setOutputTokens(String(preset.output_tokens || ""));
+  }, [preset]);
+
+  useEffect(() => {
+    if (loadedScripts.length === 1) {
+      setScriptId(loadedScripts[0].id);
+      return;
     }
-  }, [runningBenchmark?.raw_log]);
+    if (scriptId && !loadedScripts.some((script) => script.id === scriptId)) {
+      setScriptId("");
+    }
+  }, [loadedScripts, scriptId]);
 
   async function run() {
     try {
-      await request("/api/benchmarks", { method: "POST", body: JSON.stringify({ script_id: scriptId, preset_id: presetId }) });
+      await request("/api/benchmarks", {
+        method: "POST",
+        body: JSON.stringify({
+          script_id: scriptId,
+          preset_id: presetId,
+          prompt,
+          output_tokens: Number(outputTokens) || undefined
+        })
+      });
       reload();
       loadHistory();
       toast("Benchmark started");
@@ -777,20 +862,24 @@ function Benchmarks({ presets, models, reload, toast }) {
         <div className="spacer" />
         <button className="subtle" onClick={() => setHistoryOpen(!historyOpen)}>
           {historyOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          {historyOpen ? "Active only" : "Open history"}
+          {historyOpen ? "Show active only" : "Open history"}
         </button>
       </div>
       <div className="toolbar wrap">
         <select value={scriptId} onChange={(event) => setScriptId(event.target.value)}>
-          <option value="">Select loaded script version</option>
-          {scripts.map((script) => <option key={script.id} value={script.id}>{script.modelName} / {script.name}</option>)}
+          <option value="">{loadedScripts.length ? "Select loaded script version" : "No loaded script available"}</option>
+          {loadedScripts.map((script) => <option key={script.id} value={script.id}>{script.modelName} / {script.name}</option>)}
         </select>
         <select value={presetId} onChange={(event) => setPresetId(event.target.value)}>
           {presets.map((item) => <option key={item.id} value={item.id}>{item.name}: {item.prompt_tokens} in / {item.output_tokens} out</option>)}
         </select>
+        <input className="tokenInput" type="number" min="1" value={outputTokens} onChange={(event) => setOutputTokens(event.target.value)} title="Expected output tokens" />
         <button className="primary" onClick={run} disabled={!scriptId}><Play size={14} /> Run</button>
       </div>
-      {preset && <textarea className="promptPreview" readOnly value={preset.prompt} />}
+      {selectedScript && <div className="selectionHint">Ready: <strong>{selectedScript.modelName}</strong><span>{selectedScript.name}</span></div>}
+      {!loadedScripts.length && <div className="empty inlineEmpty">Load a model script first, then this dashboard can run benchmarks against it.</div>}
+      {loadedScripts.length > 1 && !scriptId && <div className="empty inlineEmpty">Choose one loaded script version to enable Run.</div>}
+      {preset && <textarea className="promptPreview" value={prompt} onChange={(event) => setPrompt(event.target.value)} />}
       <div className="toolbar compactFilters">
         <select value={modelFilter} onChange={(event) => setModelFilter(event.target.value)}>
           <option value="">All models</option>
@@ -807,11 +896,14 @@ function Benchmarks({ presets, models, reload, toast }) {
       </div>
       <div className="table">
         <div className="thead benchGrid"><span>Model</span><span>Preset</span><span>Status</span><span>FTTT</span><span>Prefill</span><span>Generation</span><span>Average</span></div>
-        {!history.length && <div className="empty">{historyOpen ? "No benchmark history matches these filters." : "No active benchmarks."}</div>}
+        {!history.length && <div className="empty">{historyOpen ? "No benchmark history matches these filters." : "No active benchmarks. Select a loaded script and press Run to start one."}</div>}
         {history.map((item) => (
           <details className="benchItem" key={item.id}>
             <summary className="row benchGrid">
-              <strong title={item.script_name || "Script unavailable"}>{item.model_name || "unknown model"}</strong>
+              <span className="benchModel">
+                <strong title={item.script_name || "Script unavailable"}>{item.model_name || "unknown model"}</strong>
+                <small title={item.script_name || ""}>{item.script_name || "script unavailable"}</small>
+              </span>
               <strong>{item.preset_id || "custom"}</strong>
               <Pill tone={item.status}>{item.status}</Pill>
               <span>{item.fttt_ms ? `${item.fttt_ms.toFixed(0)} ms` : "n/a"}</span>
@@ -829,17 +921,6 @@ function Benchmarks({ presets, models, reload, toast }) {
           <span>Page {historyPage + 1} / {pages}</span>
           <button onClick={() => setHistoryPage(Math.min(pages - 1, historyPage + 1))} disabled={historyPage >= pages - 1}>Next</button>
         </div>
-      )}
-      {runningBenchmark && (
-        <aside className="benchDrawer">
-          <div className="drawerHead">
-            <BarChart3 size={15} />
-            <strong>{runningBenchmark.model_name || "Benchmark"}</strong>
-            <Pill tone="running">running</Pill>
-          </div>
-          <small title={runningBenchmark.script_name || ""}>{runningBenchmark.script_name || "script unavailable"}</small>
-          <pre className="terminal drawerTerminal" ref={terminalRef}>{runningBenchmark.raw_log || "Waiting for benchmark traffic..."}</pre>
-        </aside>
       )}
     </section>
   );
@@ -901,7 +982,7 @@ function App() {
             <ImportModel reload={reload} toast={toast} settings={settings} />
             <Downloads downloads={downloads} reload={reload} toast={toast} />
             <Runs runs={runs} reload={reload} toast={toast} />
-            <Benchmarks presets={presets} models={models} reload={reload} toast={toast} />
+            <Benchmarks presets={presets} models={models} runs={runs} reload={reload} toast={toast} />
           </div>
         </div>
       </main>
