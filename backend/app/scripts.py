@@ -22,6 +22,7 @@ class ScriptInfo:
     mtp: bool
     model_ref: str | None
     alias: str | None
+    n_cpu_moe: int | None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -79,6 +80,7 @@ def parse_script(raw_script: str) -> ScriptInfo:
     ctx = _value_after(args, "-c", "--ctx-size")
     model_ref = _value_after(args, "-m", "--model", "-hf", "-hfr", "--hf-repo")
     alias = _value_after(args, "--alias")
+    n_cpu_moe = _value_after(args, "--n-cpu-moe")
     quant = detect_quantization(model_ref, alias, raw_script)
     flash_value = (_value_after(args, "-fa", "--flash-attn") or "").lower()
     flash = flash_value in {"on", "true", "1", "yes"}
@@ -94,6 +96,7 @@ def parse_script(raw_script: str) -> ScriptInfo:
         mtp=mtp,
         model_ref=model_ref,
         alias=alias,
+        n_cpu_moe=int(n_cpu_moe) if n_cpu_moe and n_cpu_moe.isdigit() else None,
     )
 
 
@@ -111,8 +114,15 @@ def autosuggest_name(model_name: str, raw_script: str) -> str:
     return " / ".join(parts)
 
 
-def estimate_vram_mib(model_size_bytes: int | None, ctx_size: int | None, safety_mib: int = 1024) -> int | None:
+def estimate_vram_mib(
+    model_size_bytes: int | None,
+    ctx_size: int | None,
+    safety_mib: int = 1024,
+    n_cpu_moe: int | None = None,
+) -> int | None:
     if not model_size_bytes:
+        return None
+    if n_cpu_moe:
         return None
     weight_mib = model_size_bytes / (1024 * 1024)
     ctx_mib = 0
@@ -121,9 +131,17 @@ def estimate_vram_mib(model_size_bytes: int | None, ctx_size: int | None, safety
     return int(weight_mib * 1.08 + ctx_mib + safety_mib)
 
 
-def can_fit_vram(free_mib: int, estimated_mib: int | None, manual_mib: int | None = None, reserve_mib: int = 1024) -> tuple[bool, str]:
+def can_fit_vram(
+    free_mib: int,
+    estimated_mib: int | None,
+    manual_mib: int | None = None,
+    reserve_mib: int = 1024,
+    allow_unknown: bool = False,
+) -> tuple[bool, str]:
     needed = estimated_mib or manual_mib
     if not needed:
+        if allow_unknown:
+            return True, "VRAM gate skipped because this script keeps MoE experts on CPU/RAM."
         return False, "Missing VRAM estimate. Enter a manual estimate before starting."
     if free_mib - reserve_mib < needed:
         return False, f"Needs about {needed} MiB plus {reserve_mib} MiB reserve, but only {free_mib} MiB is free."

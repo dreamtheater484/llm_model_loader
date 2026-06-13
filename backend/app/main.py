@@ -252,7 +252,7 @@ def create_script(model_id: str, body: ScriptIn) -> dict[str, Any]:
     if not model:
         raise HTTPException(status_code=404, detail="Model not found.")
     parsed = parse_script(body.raw_script).to_dict()
-    estimate = body.estimated_vram_mib or estimate_vram_mib(model.get("size_bytes"), parsed.get("ctx_size"))
+    estimate = body.estimated_vram_mib or estimate_vram_mib(model.get("size_bytes"), parsed.get("ctx_size"), n_cpu_moe=parsed.get("n_cpu_moe"))
     script_id = new_id("script")
     name = body.name or autosuggest_name(model["name"], body.raw_script)
     store.execute(
@@ -272,7 +272,7 @@ def update_script(model_id: str, script_id: str, body: ScriptIn) -> dict[str, An
         raise HTTPException(status_code=404, detail="Script not found.")
     model = store.row("select * from models where id=?", (model_id,))
     parsed = parse_script(body.raw_script).to_dict()
-    estimate = body.estimated_vram_mib or estimate_vram_mib((model or {}).get("size_bytes"), parsed.get("ctx_size"))
+    estimate = body.estimated_vram_mib or estimate_vram_mib((model or {}).get("size_bytes"), parsed.get("ctx_size"), n_cpu_moe=parsed.get("n_cpu_moe"))
     store.execute(
         "update scripts set name=?, raw_script=?, parsed_json=?, estimated_vram_mib=?, updated_at=? where id=?",
         (body.name or autosuggest_name((model or {}).get("name", ""), body.raw_script), body.raw_script, json.dumps(parsed), estimate, now(), script_id),

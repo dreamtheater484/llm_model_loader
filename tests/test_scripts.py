@@ -28,6 +28,11 @@ class ScriptTests(unittest.TestCase):
         self.assertTrue(info.flash_attention)
         self.assertTrue(info.mtp)
 
+    def test_parse_script_extracts_moe_cpu_experts(self):
+        raw = '-m "C:\\models\\Qwen3.6-35B-A3B-Q4_K_M.gguf" --ctx-size 65536 --n-cpu-moe 34'
+        info = parse_script(raw)
+        self.assertEqual(info.n_cpu_moe, 34)
+
     def test_parse_script_strips_quoted_executable_from_args(self):
         raw = '& "C:\\Users\\Roy\\AI\\llama.cpp\\llama-server.exe" `\n  -m "C:\\models\\model-Q4_K_M.gguf" `\n  --host 127.0.0.1'
         info = parse_script(raw)
@@ -54,6 +59,13 @@ class ScriptTests(unittest.TestCase):
         ok, reason = can_fit_vram(4096, estimate)
         self.assertFalse(ok)
         self.assertIn("Needs", reason)
+
+    def test_moe_cpu_experts_skip_dense_estimate(self):
+        estimate = estimate_vram_mib(22 * 1024 * 1024 * 1024, 65536, n_cpu_moe=34)
+        self.assertIsNone(estimate)
+        ok, reason = can_fit_vram(7948, estimate, allow_unknown=True)
+        self.assertTrue(ok)
+        self.assertIn("MoE", reason)
 
 
 if __name__ == "__main__":

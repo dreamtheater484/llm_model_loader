@@ -72,8 +72,19 @@ class RunManager:
             raise ValueError("Model not found.")
         gpus = query_gpus()
         free_mib = gpus[0]["memory_free_mib"] if gpus else 0
-        estimate = script.get("estimated_vram_mib") or estimate_vram_mib(model.get("size_bytes"), script["parsed_json"].get("ctx_size"))
-        ok, reason = can_fit_vram(free_mib, estimate, manual_vram_mib or model.get("manual_vram_mib"))
+        parsed = script["parsed_json"]
+        estimate = script.get("estimated_vram_mib") or estimate_vram_mib(
+            model.get("size_bytes"),
+            parsed.get("ctx_size"),
+            n_cpu_moe=parsed.get("n_cpu_moe"),
+        )
+        manual = manual_vram_mib or model.get("manual_vram_mib")
+        allow_unknown = bool(parsed.get("n_cpu_moe") and not manual)
+        if allow_unknown and estimate and model.get("size_bytes"):
+            model_size_mib = model["size_bytes"] / (1024 * 1024)
+            if estimate >= model_size_mib * 0.9:
+                estimate = None
+        ok, reason = can_fit_vram(free_mib, estimate, manual, allow_unknown=allow_unknown)
         if not ok:
             raise ValueError(reason)
         llama_server = resolve_llama_server_path(store.setting("llama_server_path") or script["parsed_json"].get("executable") or "")
