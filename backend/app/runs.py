@@ -33,6 +33,20 @@ class RunManager:
         self.reconcile_stale_runs()
         return store.rows("select * from runs order by started_at desc limit 20")
 
+    def validate_start(self, script_id: str, manual_vram_mib: int | None = None) -> dict[str, Any]:
+        plan = self._launch_plan(script_id, manual_vram_mib)
+        return {
+            "ok": True,
+            "reason": plan["vram_reason"],
+            "llama_server": plan["llama_server"],
+            "host": plan["host"],
+            "port": plan["port"],
+            "estimated_vram_mib": plan["estimated_vram_mib"],
+            "manual_vram_mib": plan["manual_vram_mib"],
+            "n_cpu_moe": plan["parsed"].get("n_cpu_moe"),
+            "args": plan["args"],
+        }
+
     def reconcile_stale_runs(self) -> None:
         rows = store.rows("select id, pid, status from runs where status in ('loading','loaded')")
         for row in rows:
@@ -63,37 +77,11 @@ class RunManager:
                 )
 
     def start(self, script_id: str, manual_vram_mib: int | None = None) -> dict[str, Any]:
-        script = store.row("select * from scripts where id=?", (script_id,))
-        if not script:
-            raise ValueError("Script not found.")
-        script = decode_json_field(script, "parsed_json")
-        model = store.row("select * from models where id=?", (script["model_id"],))
-        if not model:
-            raise ValueError("Model not found.")
-        gpus = query_gpus()
-        free_mib = gpus[0]["memory_free_mib"] if gpus else 0
-        parsed = script["parsed_json"]
-        estimate = script.get("estimated_vram_mib") or estimate_vram_mib(
-            model.get("size_bytes"),
-            parsed.get("ctx_size"),
-            n_cpu_moe=parsed.get("n_cpu_moe"),
-        )
-        manual = manual_vram_mib or model.get("manual_vram_mib")
-        allow_unknown = bool(parsed.get("n_cpu_moe") and not manual)
-        if allow_unknown and estimate and model.get("size_bytes"):
-            model_size_mib = model["size_bytes"] / (1024 * 1024)
-            if estimate >= model_size_mib * 0.9:
-                estimate = None
-        ok, reason = can_fit_vram(free_mib, estimate, manual, allow_unknown=allow_unknown)
-        if not ok:
-            raise ValueError(reason)
-        llama_server = resolve_llama_server_path(store.setting("llama_server_path") or script["parsed_json"].get("executable") or "")
-        if not llama_server:
-            raise ValueError("Configure llama-server.exe before starting a script.")
-        if not os.path.exists(llama_server):
-            raise ValueError(f"llama-server.exe was not found: {llama_server}")
-        parsed_args = parse_script(script["raw_script"]).args
-        args = [llama_server] + parsed_args
+        plan = self._launch_plan(script_id, manual_vram_mib)
+        script = plan["script"]
+        model = plan["model"]
+        parsed = plan["parsed"]
+        args = plan["args"]
         run_id = new_id("run")
         message = "Launching llama.cpp server."
         store.execute(
@@ -101,7 +89,7 @@ class RunManager:
             insert into runs(id, script_id, model_id, status, status_message, host, port, started_at, last_heartbeat_at)
             values(?, ?, ?, 'loading', ?, ?, ?, ?, ?)
             """,
-            (run_id, script_id, model["id"], message, script["parsed_json"].get("host"), script["parsed_json"].get("port"), now(), now()),
+            (run_id, script_id, model["id"], message, parsed.get("host"), parsed.get("port"), now(), now()),
         )
         process = subprocess.Popen(
             args,
@@ -117,10 +105,54 @@ class RunManager:
             self._processes[run_id] = process
         store.execute("update runs set pid=? where id=?", (process.pid, run_id))
         self._append_log(run_id, f"[loader] Starting llama-server PID {process.pid}.")
-        self._append_log(run_id, f"[loader] Executable: {llama_server}")
-        self._append_log(run_id, f"[loader] Health check: http://{script['parsed_json'].get('host') or '127.0.0.1'}:{script['parsed_json'].get('port') or 8080}/health")
+        self._append_log(run_id, f"[loader] Executable: {plan['llama_server']}")
+        self._append_log(run_id, f"[loader] Health check: http://{parsed.get('host') or '127.0.0.1'}:{parsed.get('port') or 8080}/health")
         threading.Thread(target=self._watch, args=(run_id, process), daemon=True).start()
         return store.row("select * from runs where id=?", (run_id,)) or {"id": run_id}
+
+    def _launch_plan(self, script_id: str, manual_vram_mib: int | None = None) -> dict[str, Any]:
+        script = store.row("select * from scripts where id=?", (script_id,))
+        if not script:
+            raise ValueError("Script not found.")
+        script = decode_json_field(script, "parsed_json")
+        model = store.row("select * from models where id=?", (script["model_id"],))
+        if not model:
+            raise ValueError("Model not found.")
+        gpus = query_gpus()
+        free_mib = gpus[0]["memory_free_mib"] if gpus else 0
+        parsed = parse_script(script["raw_script"]).to_dict()
+        manual = manual_vram_mib or model.get("manual_vram_mib")
+        is_moe_cpu = bool(parsed.get("n_cpu_moe"))
+        estimate = None
+        if not (is_moe_cpu and not manual):
+            estimate = script.get("estimated_vram_mib") or estimate_vram_mib(
+                model.get("size_bytes"),
+                parsed.get("ctx_size"),
+                n_cpu_moe=parsed.get("n_cpu_moe"),
+            )
+        allow_unknown = bool(is_moe_cpu and not manual)
+        ok, reason = can_fit_vram(free_mib, estimate, manual, allow_unknown=allow_unknown)
+        if not ok:
+            raise ValueError(reason)
+        llama_server = resolve_llama_server_path(store.setting("llama_server_path") or script["parsed_json"].get("executable") or "")
+        if not llama_server:
+            raise ValueError("Configure llama-server.exe before starting a script.")
+        if not os.path.exists(llama_server):
+            raise ValueError(f"llama-server.exe was not found: {llama_server}")
+        parsed_args = parsed["args"]
+        args = [llama_server] + parsed_args
+        return {
+            "script": script,
+            "model": model,
+            "parsed": parsed,
+            "args": args,
+            "llama_server": llama_server,
+            "host": parsed.get("host") or "127.0.0.1",
+            "port": parsed.get("port") or 8080,
+            "estimated_vram_mib": estimate,
+            "manual_vram_mib": manual,
+            "vram_reason": reason,
+        }
 
     def stop(self, run_id: str, status: str = "unloaded") -> dict[str, Any]:
         with self._lock:

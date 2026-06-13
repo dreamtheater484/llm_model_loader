@@ -590,6 +590,9 @@ function SavedScript({ model, script, start, removeScript, reload, toast }) {
   const [raw, setRaw] = useState(script.raw_script || "");
   const [estimate, setEstimate] = useState(script.estimated_vram_mib ? String(script.estimated_vram_mib) : "");
   const [saving, setSaving] = useState(false);
+  const memoryLabel = script.parsed_json?.n_cpu_moe
+    ? `MoE CPU/RAM (${script.parsed_json.n_cpu_moe} CPU experts)`
+    : `${formatMib(script.estimated_vram_mib)} estimated`;
 
   function reset() {
     setName(script.name || "");
@@ -624,7 +627,7 @@ function SavedScript({ model, script, start, removeScript, reload, toast }) {
       <div className="scriptRow">
         <div>
           <strong>{script.name}</strong>
-          <span>{script.parsed_json?.ctx_size || "auto"} ctx / {script.parsed_json?.quantization || model.quantization || "quant?"} / {formatMib(script.estimated_vram_mib)} estimated</span>
+          <span>{script.parsed_json?.ctx_size || "auto"} ctx / {script.parsed_json?.quantization || model.quantization || "quant?"} / {memoryLabel}</span>
         </div>
         <button className="primary" onClick={() => start(script.id)} disabled={editing}><Play size={14} /> Start</button>
         <button className="subtle" onClick={() => setEditing(true)} disabled={editing}><Pencil size={14} /> Edit</button>

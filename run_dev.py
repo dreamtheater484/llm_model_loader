@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import shutil
+import socket
+import os
 import subprocess
 import sys
 from pathlib import Path
-
-from backend.app.config import DEFAULT_HOST, DEFAULT_PORT
 
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND = ROOT / "frontend"
 FRONTEND_DIST_INDEX = FRONTEND / "dist" / "index.html"
+DEFAULT_HOST = os.environ.get("LLM_MODEL_LOADER_HOST", "127.0.0.1")
+DEFAULT_PORT = int(os.environ.get("LLM_MODEL_LOADER_PORT", "8174"))
 
 
 def ensure_frontend_build() -> None:
@@ -32,6 +34,21 @@ def ensure_frontend_build() -> None:
     subprocess.run([npm, "run", "build"], cwd=FRONTEND, check=True)
 
 
+def port_available(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.25)
+        return sock.connect_ex((host, port)) != 0
+
+
+def select_port(host: str, preferred: int) -> int:
+    if port_available(host, preferred):
+        return preferred
+    for port in range(preferred + 1, preferred + 20):
+        if port_available(host, port):
+            return port
+    raise SystemExit(f"No free port found from {preferred} through {preferred + 19}.")
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -40,4 +57,9 @@ if __name__ == "__main__":
     except subprocess.CalledProcessError as exc:
         sys.exit(exc.returncode)
 
-    uvicorn.run("backend.app.main:app", host=DEFAULT_HOST, port=DEFAULT_PORT, reload=True)
+    port = select_port(DEFAULT_HOST, DEFAULT_PORT)
+    os.environ["LLM_MODEL_LOADER_HOST"] = DEFAULT_HOST
+    os.environ["LLM_MODEL_LOADER_PORT"] = str(port)
+    print(f"Starting LLM Model Loader at http://{DEFAULT_HOST}:{port}")
+
+    uvicorn.run("backend.app.main:app", host=DEFAULT_HOST, port=port, reload=False)

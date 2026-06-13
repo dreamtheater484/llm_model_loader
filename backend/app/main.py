@@ -75,10 +75,14 @@ class BenchmarkIn(BaseModel):
 def _model_rows() -> list[dict[str, Any]]:
     models = store.rows("select * from models order by created_at desc")
     for model in models:
-        model["scripts"] = [
-            decode_json_field(row, "parsed_json")
-            for row in store.rows("select * from scripts where model_id=? order by created_at desc", (model["id"],))
-        ]
+        scripts = []
+        for row in store.rows("select * from scripts where model_id=? order by created_at desc", (model["id"],)):
+            parsed = parse_script(row["raw_script"]).to_dict()
+            row["parsed_json"] = parsed
+            if parsed.get("n_cpu_moe"):
+                row["estimated_vram_mib"] = None
+            scripts.append(row)
+        model["scripts"] = scripts
     return models
 
 
@@ -290,6 +294,14 @@ def delete_script(model_id: str, script_id: str) -> dict[str, Any]:
 def start_run(body: StartRunIn) -> dict[str, Any]:
     try:
         return run_manager.start(body.script_id, body.manual_vram_mib)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/runs/validate")
+def validate_run(body: StartRunIn) -> dict[str, Any]:
+    try:
+        return run_manager.validate_start(body.script_id, body.manual_vram_mib)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

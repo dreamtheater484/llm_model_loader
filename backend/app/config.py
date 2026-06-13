@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 APP_NAME = "llm-model-loader"
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 8174
+DEFAULT_HOST = os.environ.get("LLM_MODEL_LOADER_HOST", "127.0.0.1")
+DEFAULT_PORT = int(os.environ.get("LLM_MODEL_LOADER_PORT", "8174"))
 
 
 def user_home() -> Path:

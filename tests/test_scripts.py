@@ -33,6 +33,11 @@ class ScriptTests(unittest.TestCase):
         info = parse_script(raw)
         self.assertEqual(info.n_cpu_moe, 34)
 
+    def test_parse_script_strips_single_quoted_json_arg(self):
+        raw = """--chat-template-kwargs '{"preserve_thinking":false}'"""
+        info = parse_script(raw)
+        self.assertEqual(info.args, ["--chat-template-kwargs", '{"preserve_thinking":false}'])
+
     def test_parse_script_strips_quoted_executable_from_args(self):
         raw = '& "C:\\Users\\Roy\\AI\\llama.cpp\\llama-server.exe" `\n  -m "C:\\models\\model-Q4_K_M.gguf" `\n  --host 127.0.0.1'
         info = parse_script(raw)
@@ -66,6 +71,10 @@ class ScriptTests(unittest.TestCase):
         ok, reason = can_fit_vram(7948, estimate, allow_unknown=True)
         self.assertTrue(ok)
         self.assertIn("MoE", reason)
+
+    def test_manual_vram_overrides_automatic_estimate(self):
+        ok, _ = can_fit_vram(7948, estimated_mib=23611, manual_mib=6500)
+        self.assertTrue(ok)
 
 
 if __name__ == "__main__":

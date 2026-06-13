@@ -10,6 +10,13 @@ from typing import Any
 QUANT_RE = re.compile(r"(?:^|[-_:])((?:UD-)?(?:IQ|Q|F)\d(?:_[A-Z0-9]+)+|F16|BF16|Q8_0|Q4_K_M|Q5_K_M)(?:$|[-_.:])", re.I)
 
 
+def _strip_shell_quotes(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    return text.strip('"')
+
+
 @dataclass
 class ScriptInfo:
     executable: str | None
@@ -33,9 +40,9 @@ def _powershell_to_argv(raw: str) -> list[str]:
     text = text.replace("& ", "")
     text = re.sub(r"\$env:USERPROFILE", str(Path.home()).replace("\\", "\\\\"), text, flags=re.I)
     try:
-        return [arg.strip().strip('"') for arg in shlex.split(text, posix=False)]
+        return [_strip_shell_quotes(arg) for arg in shlex.split(text, posix=False)]
     except ValueError:
-        return [arg.strip().strip('"') for arg in text.split()]
+        return [_strip_shell_quotes(arg) for arg in text.split()]
 
 
 def _is_executable_token(value: str) -> bool:
@@ -138,7 +145,7 @@ def can_fit_vram(
     reserve_mib: int = 1024,
     allow_unknown: bool = False,
 ) -> tuple[bool, str]:
-    needed = estimated_mib or manual_mib
+    needed = manual_mib or estimated_mib
     if not needed:
         if allow_unknown:
             return True, "VRAM gate skipped because this script keeps MoE experts on CPU/RAM."
