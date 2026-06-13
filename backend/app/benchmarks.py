@@ -90,23 +90,27 @@ class BenchmarkManager:
     def _run(self, bench_id: str, script: dict[str, Any], prompt: str, max_tokens: int) -> None:
         host = script["parsed_json"].get("host") or "127.0.0.1"
         port = script["parsed_json"].get("port") or 8080
-        url = f"http://{host}:{port}/completion"
-        payload = json.dumps(
-            {
-                "prompt": prompt,
-                "n_predict": max_tokens,
-                "stream": True,
-                "timings_per_token": True,
-                "return_progress": True,
-            }
-        ).encode("utf-8")
+        url = f"http://{host}:{port}/v1/chat/completions"
+        parsed = script["parsed_json"]
+        model = parsed.get("alias") or parsed.get("model_ref") or "default"
+        request_payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "stream": True,
+            "temperature": 0,
+            "timings_per_token": True,
+            "chat_template_kwargs": {"enable_thinking": False},
+            "reasoning_format": "deepseek",
+        }
+        payload = json.dumps(request_payload).encode("utf-8")
         request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
         started = time.time()
         first_token_at: float | None = None
         tokens = 0
         raw_log: list[str] = [
             f"> POST {url}",
-            f"> payload: {json.dumps({'prompt': prompt, 'n_predict': max_tokens, 'stream': True, 'timings_per_token': True, 'return_progress': True})}",
+            f"> payload: {json.dumps(request_payload)}",
         ]
         store.execute("update benchmark_runs set raw_log=? where id=?", ("\n".join(raw_log), bench_id))
         event_hub.publish_threadsafe("benchmark", store.row("select * from benchmark_runs where id=?", (bench_id,)) or {})
@@ -117,9 +121,12 @@ class BenchmarkManager:
                     line = raw.decode("utf-8", errors="replace").strip()
                     if not line:
                         continue
+                    if line == "data: [DONE]":
+                        raw_log.append(f"< {line}")
+                        continue
                     data = self._parse_stream_json(line)
                     raw_log.append(f"< {line}")
-                    content = data.get("content") if isinstance(data, dict) else None
+                    content = self._stream_content(data)
                     timings = data.get("timings") if isinstance(data, dict) else None
                     if first_token_at is None and content:
                         first_token_at = time.time()
@@ -162,6 +169,23 @@ class BenchmarkManager:
             return data if isinstance(data, dict) else {}
         except json.JSONDecodeError:
             return {}
+
+    @staticmethod
+    def _stream_content(data: dict[str, Any]) -> str | None:
+        content = data.get("content")
+        if isinstance(content, str):
+            return content
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            choice = choices[0]
+            if isinstance(choice, dict):
+                delta = choice.get("delta")
+                if isinstance(delta, dict) and isinstance(delta.get("content"), str):
+                    return delta["content"]
+                message = choice.get("message")
+                if isinstance(message, dict) and isinstance(message.get("content"), str):
+                    return message["content"]
+        return None
 
     @staticmethod
     def _timing_value(timings: Any, key: str) -> float | None:
