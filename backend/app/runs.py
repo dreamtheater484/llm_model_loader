@@ -17,6 +17,9 @@ from .storage import decode_json_field, new_id, now, store
 
 
 class RunManager:
+    INACTIVE_STATUSES = {"aborted", "failed", "unloaded", "exited"}
+    PROTECTED_STATUSES = {"loading", "loaded", "orphaned"}
+
     def __init__(self) -> None:
         self._processes: dict[str, subprocess.Popen[str]] = {}
         self._lock = threading.Lock()
@@ -171,7 +174,7 @@ class RunManager:
         row = store.row("select * from runs where id=?", (run_id,))
         if not row:
             raise ValueError("Run not found.")
-        if row["status"] in {"loading", "loaded", "orphaned"}:
+        if row["status"] in self.PROTECTED_STATUSES:
             raise ValueError("Abort or unload this run before deleting its terminal history.")
         with self._lock:
             process = self._processes.get(run_id)
@@ -181,6 +184,28 @@ class RunManager:
         store.execute("delete from runs where id=?", (run_id,))
         event_hub.publish_threadsafe("run", {"id": run_id, "deleted": True})
         return {"ok": True}
+
+    def delete_history(self) -> dict[str, int]:
+        self.reconcile_stale_runs()
+        inactive_rows = store.rows(
+            f"select id from runs where status in ({','.join('?' for _ in self.INACTIVE_STATUSES)})",
+            tuple(self.INACTIVE_STATUSES),
+        )
+        kept_row = store.row(
+            f"select count(*) as n from runs where status in ({','.join('?' for _ in self.PROTECTED_STATUSES)})",
+            tuple(self.PROTECTED_STATUSES),
+        )
+        inactive_ids = [row["id"] for row in inactive_rows]
+        if inactive_ids:
+            with self._lock:
+                for run_id in inactive_ids:
+                    self._processes.pop(run_id, None)
+            store.execute(
+                f"delete from runs where id in ({','.join('?' for _ in inactive_ids)})",
+                tuple(inactive_ids),
+            )
+            event_hub.publish_threadsafe("run", {"history_deleted": inactive_ids})
+        return {"deleted": len(inactive_ids), "kept_active": int((kept_row or {}).get("n") or 0)}
 
     def _watch(self, run_id: str, process: subprocess.Popen[str]) -> None:
         start = time.time()

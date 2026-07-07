@@ -521,6 +521,14 @@ h2 {
   padding: 9px 0;
 }
 
+.modelBlock {
+  background: #f8fafc;
+}
+
+.modelBlock.dragging {
+  opacity: 0.55;
+}
+
 .modelHead, .runHead, .scriptRow {
   display: flex;
   gap: 8px;
@@ -539,6 +547,42 @@ h2 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.dragHandle {
+  width: 30px;
+  padding: 0;
+  justify-content: center;
+  color: #667386;
+  touch-action: none;
+  cursor: grab;
+}
+
+.dragHandle:active {
+  cursor: grabbing;
+}
+
+.modelDragPreview {
+  width: min(520px, calc(100vw - 32px));
+  padding: 9px 10px;
+  border: 1px solid #9bbbd2;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgba(20, 28, 38, 0.22);
+}
+
+.modelDragPreview strong,
+.modelDragPreview span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelDragPreview span {
+  color: #667386;
+  font-size: 12px;
+  margin-top: 2px;
 }
 
 .scripts {

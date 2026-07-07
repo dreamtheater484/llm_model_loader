@@ -1,6 +1,23 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   Activity,
   BarChart3,
   Boxes,
@@ -13,6 +30,7 @@ import {
   Folder,
   FolderOpen,
   Gauge,
+  GripVertical,
   HardDrive,
   Home,
   Pencil,
@@ -584,7 +602,7 @@ function ScriptEditor({ model, reload, toast }) {
   );
 }
 
-function SavedScript({ model, script, start, removeScript, reload, toast }) {
+function SavedScript({ model, script, start, removeScript, reload, toast, onEditingChange }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(script.name || "");
   const [raw, setRaw] = useState(script.raw_script || "");
@@ -599,6 +617,7 @@ function SavedScript({ model, script, start, removeScript, reload, toast }) {
     setRaw(script.raw_script || "");
     setEstimate(script.estimated_vram_mib ? String(script.estimated_vram_mib) : "");
     setEditing(false);
+    onEditingChange(false);
   }
 
   async function save() {
@@ -613,6 +632,7 @@ function SavedScript({ model, script, start, removeScript, reload, toast }) {
         })
       });
       setEditing(false);
+      onEditingChange(false);
       reload();
       toast("Script updated");
     } catch (error) {
@@ -630,7 +650,7 @@ function SavedScript({ model, script, start, removeScript, reload, toast }) {
           <span>{script.parsed_json?.ctx_size || "auto"} ctx / {script.parsed_json?.quantization || model.quantization || "quant?"} / {memoryLabel}</span>
         </div>
         <button className="primary" onClick={() => start(script.id)} disabled={editing}><Play size={14} /> Start</button>
-        <button className="subtle" onClick={() => setEditing(true)} disabled={editing}><Pencil size={14} /> Edit</button>
+        <button className="subtle" onClick={() => { setEditing(true); onEditingChange(true); }} disabled={editing}><Pencil size={14} /> Edit</button>
         <IconButton icon={Trash2} label="Delete script" onClick={() => removeScript(model, script)} disabled={editing} />
       </div>
       {editing && (
@@ -648,7 +668,82 @@ function SavedScript({ model, script, start, removeScript, reload, toast }) {
   );
 }
 
+function SortableModelBlock({ model, draggingDisabled, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: model.id,
+    disabled: draggingDisabled
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  };
+  return (
+    <div ref={setNodeRef} style={style} className={`modelBlock ${isDragging ? "dragging" : ""}`}>
+      {children({ attributes, listeners, draggingDisabled })}
+    </div>
+  );
+}
+
+function ModelDragPreview({ model }) {
+  if (!model) return null;
+  return (
+    <div className="modelDragPreview">
+      <strong>{model.name}</strong>
+      <span>{model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)}</span>
+    </div>
+  );
+}
+
 function Library({ models, reload, toast }) {
+  const [orderedModels, setOrderedModels] = useState(models);
+  const [activeModelId, setActiveModelId] = useState(null);
+  const [editingScripts, setEditingScripts] = useState({});
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+  const activeModel = orderedModels.find((model) => model.id === activeModelId);
+
+  useEffect(() => {
+    setOrderedModels(models);
+  }, [models]);
+
+  function markScriptEditing(modelId, scriptId, editing) {
+    setEditingScripts((current) => {
+      const next = { ...current };
+      const scriptIds = new Set(next[modelId] || []);
+      if (editing) {
+        scriptIds.add(scriptId);
+      } else {
+        scriptIds.delete(scriptId);
+      }
+      if (scriptIds.size) {
+        next[modelId] = Array.from(scriptIds);
+      } else {
+        delete next[modelId];
+      }
+      return next;
+    });
+  }
+
+  async function reorderModels(activeId, overId) {
+    if (!overId || activeId === overId) return;
+    const oldIndex = orderedModels.findIndex((model) => model.id === activeId);
+    const newIndex = orderedModels.findIndex((model) => model.id === overId);
+    if (oldIndex < 0 || newIndex < 0) return;
+    const previous = orderedModels;
+    const next = arrayMove(orderedModels, oldIndex, newIndex);
+    setOrderedModels(next);
+    try {
+      await request("/api/models/order", { method: "PATCH", body: JSON.stringify({ model_ids: next.map((model) => model.id) }) });
+      reload();
+      toast("Model order saved");
+    } catch (error) {
+      setOrderedModels(previous);
+      toast(error.message);
+    }
+  }
+
   async function remove(model) {
     if (!confirm(`Physically delete ${model.name}?`)) return;
     try {
@@ -684,38 +779,74 @@ function Library({ models, reload, toast }) {
         <HardDrive size={16} />
         <h2>Model Library</h2>
       </div>
-      {!models.length && <div className="empty">Downloaded and imported models will appear here.</div>}
-      {models.map((model) => (
-        <div className="modelBlock" key={model.id}>
-          <div className="modelHead">
-            <div>
-              <strong>{model.name}</strong>
-              <span>{model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)} / {model.path}</span>
-            </div>
-            <IconButton icon={Trash2} label="Delete model" onClick={() => remove(model)} />
-          </div>
-          <div className="scripts">
-            {model.scripts?.map((script) => (
-              <SavedScript
-                key={script.id}
-                model={model}
-                script={script}
-                start={start}
-                removeScript={removeScript}
-                reload={reload}
-                toast={toast}
-              />
-            ))}
-          </div>
-          <ScriptEditor model={model} reload={reload} toast={toast} />
-        </div>
-      ))}
+      {!orderedModels.length && <div className="empty">Downloaded and imported models will appear here.</div>}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={(event) => setActiveModelId(event.active.id)}
+        onDragCancel={() => setActiveModelId(null)}
+        onDragEnd={(event) => {
+          setActiveModelId(null);
+          reorderModels(event.active.id, event.over?.id);
+        }}
+      >
+        <SortableContext items={orderedModels.map((model) => model.id)} strategy={verticalListSortingStrategy}>
+          {orderedModels.map((model) => {
+            const draggingDisabled = Boolean(editingScripts[model.id]?.length);
+            return (
+              <SortableModelBlock key={model.id} model={model} draggingDisabled={draggingDisabled}>
+                {({ attributes, listeners }) => (
+                  <>
+                    <div className="modelHead">
+                      <button
+                        className="dragHandle"
+                        title={draggingDisabled ? "Finish editing this model's script before sorting" : "Drag to reorder model"}
+                        aria-label={`Drag to reorder ${model.name}`}
+                        disabled={draggingDisabled}
+                        {...attributes}
+                        {...listeners}
+                      >
+                        <GripVertical size={15} />
+                      </button>
+                      <div>
+                        <strong>{model.name}</strong>
+                        <span>{model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)} / {model.path}</span>
+                      </div>
+                      <IconButton icon={Trash2} label="Delete model" onClick={() => remove(model)} />
+                    </div>
+                    <div className="scripts">
+                      {model.scripts?.map((script) => (
+                        <SavedScript
+                          key={script.id}
+                          model={model}
+                          script={script}
+                          start={start}
+                          removeScript={removeScript}
+                          reload={reload}
+                          toast={toast}
+                          onEditingChange={(editing) => markScriptEditing(model.id, script.id, editing)}
+                        />
+                      ))}
+                    </div>
+                    <ScriptEditor model={model} reload={reload} toast={toast} />
+                  </>
+                )}
+              </SortableModelBlock>
+            );
+          })}
+        </SortableContext>
+        <DragOverlay>
+          <ModelDragPreview model={activeModel} />
+        </DragOverlay>
+      </DndContext>
     </section>
   );
 }
 
 function Runs({ runs, reload, toast }) {
   const deletableStatuses = new Set(["aborted", "failed", "unloaded", "exited"]);
+  const inactiveCount = runs.filter((run) => deletableStatuses.has(run.status)).length;
+  const protectedCount = runs.length - inactiveCount;
   function statusMessage(run) {
     if (run.status_message) return run.status_message;
     if (run.status === "failed" && run.error) return run.error;
@@ -744,11 +875,26 @@ function Runs({ runs, reload, toast }) {
       toast(error.message);
     }
   }
+  async function clearHistory() {
+    const suffix = protectedCount ? ` ${protectedCount} active/loading session${protectedCount === 1 ? "" : "s"} will stay.` : "";
+    if (!confirm(`Delete ${inactiveCount} historical terminal session${inactiveCount === 1 ? "" : "s"}?${suffix}`)) return;
+    try {
+      const result = await request("/api/runs/history", { method: "DELETE" });
+      reload();
+      toast(`Deleted ${result.deleted} historical session${result.deleted === 1 ? "" : "s"}`);
+    } catch (error) {
+      toast(error.message);
+    }
+  }
   return (
     <section className="band">
       <div className="sectionTitle">
         <Activity size={16} />
         <h2>Active Runs & Terminal</h2>
+        <div className="spacer" />
+        <button className="subtle" onClick={clearHistory} disabled={!inactiveCount}>
+          <Trash2 size={14} /> Clear history
+        </button>
       </div>
       {!runs.length && <div className="empty">No process history yet.</div>}
       {runs.map((run) => {

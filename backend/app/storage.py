@@ -42,6 +42,7 @@ class Store:
                     source text not null,
                     managed integer not null default 1,
                     manual_vram_mib integer,
+                    display_order integer,
                     created_at real not null
                 );
                 create table if not exists downloads (
@@ -118,11 +119,23 @@ class Store:
         columns = {row["name"] for row in conn.execute("pragma table_info(models)").fetchall()}
         if "normalized_path" not in columns:
             conn.execute("alter table models add column normalized_path text")
+        if "display_order" not in columns:
+            conn.execute("alter table models add column display_order integer")
         for row in conn.execute("select id, path from models where normalized_path is null or normalized_path = ''").fetchall():
             conn.execute(
                 "update models set normalized_path = ? where id = ?",
                 (normalize_path(row["path"]), row["id"]),
             )
+        for index, row in enumerate(
+            conn.execute(
+                """
+                select id from models
+                where display_order is null
+                order by created_at desc, id asc
+                """
+            ).fetchall()
+        ):
+            conn.execute("update models set display_order = ? where id = ?", (index, row["id"]))
         self._dedupe_models(conn)
         conn.execute("create unique index if not exists idx_models_normalized_path on models(normalized_path)")
         run_columns = {row["name"] for row in conn.execute("pragma table_info(runs)").fetchall()}

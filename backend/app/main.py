@@ -72,8 +72,12 @@ class BenchmarkIn(BaseModel):
     output_tokens: int | None = None
 
 
+class ModelOrderIn(BaseModel):
+    model_ids: list[str]
+
+
 def _model_rows() -> list[dict[str, Any]]:
-    models = store.rows("select * from models order by created_at desc")
+    models = store.rows("select * from models order by display_order asc, created_at desc")
     for model in models:
         scripts = []
         for row in store.rows("select * from scripts where model_id=? order by created_at desc", (model["id"],)):
@@ -179,6 +183,19 @@ def list_models() -> list[dict[str, Any]]:
     return _model_rows()
 
 
+@app.patch("/api/models/order")
+def update_model_order(body: ModelOrderIn) -> dict[str, Any]:
+    current_ids = [row["id"] for row in store.rows("select id from models order by display_order asc, created_at desc")]
+    requested = body.model_ids
+    if len(requested) != len(set(requested)):
+        raise HTTPException(status_code=400, detail="Model order contains duplicate IDs.")
+    if set(requested) != set(current_ids):
+        raise HTTPException(status_code=400, detail="Model order must contain every current model exactly once.")
+    for index, model_id in enumerate(requested):
+        store.execute("update models set display_order=? where id=?", (index, model_id))
+    return {"ok": True, "model_ids": requested}
+
+
 @app.get("/api/files/browse")
 def browse_local_files(path: str | None = None, gguf_only: bool = True, executable_only: bool = False) -> dict[str, Any]:
     return browse_files(path, gguf_only, executable_only)
@@ -212,10 +229,12 @@ def import_model(body: ImportModelIn) -> dict[str, Any]:
         return existing
     meta = inspect_model_file(str(target))
     model_id = new_id("model")
+    order_row = store.row("select coalesce(max(display_order), -1) + 1 as next_order from models")
+    display_order = int((order_row or {}).get("next_order") or 0)
     store.execute(
         """
-        insert into models(id, name, filename, path, normalized_path, size_bytes, quantization, source, managed, manual_vram_mib, created_at)
-        values(?, ?, ?, ?, ?, ?, ?, 'import', ?, ?, ?)
+        insert into models(id, name, filename, path, normalized_path, size_bytes, quantization, source, managed, manual_vram_mib, display_order, created_at)
+        values(?, ?, ?, ?, ?, ?, ?, 'import', ?, ?, ?, ?)
         """,
         (
             model_id,
@@ -227,6 +246,7 @@ def import_model(body: ImportModelIn) -> dict[str, Any]:
             meta["quantization"],
             managed,
             body.manual_vram_mib,
+            display_order,
             now(),
         ),
     )
@@ -319,6 +339,11 @@ def abort_run(run_id: str) -> dict[str, Any]:
 @app.post("/api/runs/{run_id}/unload")
 def unload_run(run_id: str) -> dict[str, Any]:
     return run_manager.stop(run_id, "unloaded")
+
+
+@app.delete("/api/runs/history")
+def delete_run_history() -> dict[str, int]:
+    return run_manager.delete_history()
 
 
 @app.delete("/api/runs/{run_id}")
