@@ -34,7 +34,15 @@ class RunManager:
 
     def list(self) -> list[dict[str, Any]]:
         self.reconcile_stale_runs()
-        return store.rows("select * from runs order by started_at desc limit 20")
+        return store.rows(
+            """
+            select r.*, m.name as model_name
+            from runs r
+            left join models m on m.id = r.model_id
+            order by r.started_at desc
+            limit 20
+            """
+        )
 
     def validate_start(self, script_id: str, manual_vram_mib: int | None = None) -> dict[str, Any]:
         plan = self._launch_plan(script_id, manual_vram_mib)

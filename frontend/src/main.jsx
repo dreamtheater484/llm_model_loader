@@ -843,10 +843,11 @@ function Library({ models, reload, toast }) {
   );
 }
 
-function Runs({ runs, reload, toast }) {
+function Runs({ runs, models, reload, toast }) {
   const deletableStatuses = new Set(["aborted", "failed", "unloaded", "exited"]);
   const inactiveCount = runs.filter((run) => deletableStatuses.has(run.status)).length;
   const protectedCount = runs.length - inactiveCount;
+  const modelNames = useMemo(() => new Map(models.map((model) => [model.id, model.name])), [models]);
   function statusMessage(run) {
     if (run.status_message) return run.status_message;
     if (run.status === "failed" && run.error) return run.error;
@@ -901,11 +902,16 @@ function Runs({ runs, reload, toast }) {
         const elapsed = run.ended_at ? run.ended_at - run.started_at : Date.now() / 1000 - run.started_at;
         const message = statusMessage(run);
         const terminalText = compactLogTail(run.log_tail) || `[loader] ${message}`;
+        const modelName = run.model_name || modelNames.get(run.model_id) || "Unknown model";
         return (
           <div className="runBlock" key={run.id}>
             <div className="runHead">
               <Pill tone={run.status}>{run.status}</Pill>
-              <span>PID {run.pid || "n/a"} / {run.host}:{run.port}</span>
+              <span className="runModel" title={modelName}>
+                <Cpu size={14} />
+                <strong>{modelName}</strong>
+              </span>
+              <span className="runEndpoint">PID {run.pid || "n/a"} / {run.host}:{run.port}</span>
               <span className="elapsed">elapsed {formatDuration(elapsed)}</span>
               <div className="spacer" />
               {["loading", "orphaned"].includes(run.status) && <button onClick={() => action(run, "abort")}><Square size={14} /> Abort</button>}
@@ -1130,7 +1136,7 @@ function App() {
           <div className="stack">
             <ImportModel reload={reload} toast={toast} settings={settings} />
             <Downloads downloads={downloads} reload={reload} toast={toast} />
-            <Runs runs={runs} reload={reload} toast={toast} />
+            <Runs runs={runs} models={models} reload={reload} toast={toast} />
             <Benchmarks presets={presets} models={models} runs={runs} reload={reload} toast={toast} />
           </div>
         </div>

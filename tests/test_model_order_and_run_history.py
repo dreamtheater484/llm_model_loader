@@ -67,6 +67,17 @@ class ModelOrderTests(unittest.TestCase):
 
 
 class RunHistoryTests(unittest.TestCase):
+    def test_list_includes_model_name(self):
+        manager = RunManager()
+        seen = []
+
+        with patch.object(manager, "reconcile_stale_runs"):
+            with patch("backend.app.runs.store.rows", side_effect=lambda query, params=(): seen.append(query) or [{"id": "run_1", "model_name": "Qwen"}]):
+                result = manager.list()
+
+        self.assertEqual(result[0]["model_name"], "Qwen")
+        self.assertIn("left join models", seen[0])
+
     def test_delete_history_removes_only_inactive_runs(self):
         manager = RunManager()
         manager._processes = {"failed_1": object(), "loaded_1": object()}

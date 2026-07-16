@@ -649,9 +649,30 @@ h2 {
   margin-bottom: 7px;
 }
 
+.runModel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 45%;
+  color: #173d56;
+}
+
+.runModel strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runEndpoint {
+  color: #344154;
+  white-space: nowrap;
+}
+
 .elapsed {
   color: #667386;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .runStatusLine {
