@@ -911,13 +911,21 @@ function Runs({ runs, models, reload, toast }) {
                 <Cpu size={14} />
                 <strong>{modelName}</strong>
               </span>
-              <span className="runEndpoint">PID {run.pid || "n/a"} / {run.host}:{run.port}</span>
-              <span className="elapsed">elapsed {formatDuration(elapsed)}</span>
-              <div className="spacer" />
               {["loading", "orphaned"].includes(run.status) && <button onClick={() => action(run, "abort")}><Square size={14} /> Abort</button>}
               {run.status === "loaded" && <button onClick={() => action(run, "unload")}><Square size={14} /> Unload</button>}
               {deletableStatuses.has(run.status) && <IconButton icon={Trash2} label="Delete terminal history" onClick={() => remove(run)} />}
             </div>
+            <details className="runDetails">
+              <summary>
+                <ChevronRight className="runDetailsChevron" size={14} />
+                Run details
+              </summary>
+              <div className="runDetailsGrid">
+                <span><strong>PID</strong>{run.pid || "n/a"}</span>
+                <span><strong>Address</strong>{run.host ? `${run.host}${run.port ? `:${run.port}` : ""}` : "n/a"}</span>
+                <span><strong>Elapsed</strong>{formatDuration(elapsed)}</span>
+              </div>
+            </details>
             <div className={`runStatusLine ${run.status}`}>
               <span className="statusDot" />
               <span>{message}</span>
