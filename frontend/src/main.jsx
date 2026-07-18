@@ -814,21 +814,27 @@ function Library({ models, reload, toast }) {
                       </div>
                       <IconButton icon={Trash2} label="Delete model" onClick={() => remove(model)} />
                     </div>
-                    <div className="scripts">
-                      {model.scripts?.map((script) => (
-                        <SavedScript
-                          key={script.id}
-                          model={model}
-                          script={script}
-                          start={start}
-                          removeScript={removeScript}
-                          reload={reload}
-                          toast={toast}
-                          onEditingChange={(editing) => markScriptEditing(model.id, script.id, editing)}
-                        />
-                      ))}
-                    </div>
-                    <ScriptEditor model={model} reload={reload} toast={toast} />
+                    <details className="modelScripts">
+                      <summary>
+                        <ChevronRight className="modelScriptsChevron" size={14} />
+                        Loading scripts ({model.scripts?.length || 0})
+                      </summary>
+                      <div className="scripts">
+                        {model.scripts?.map((script) => (
+                          <SavedScript
+                            key={script.id}
+                            model={model}
+                            script={script}
+                            start={start}
+                            removeScript={removeScript}
+                            reload={reload}
+                            toast={toast}
+                            onEditingChange={(editing) => markScriptEditing(model.id, script.id, editing)}
+                          />
+                        ))}
+                      </div>
+                      <ScriptEditor model={model} reload={reload} toast={toast} />
+                    </details>
                   </>
                 )}
               </SortableModelBlock>

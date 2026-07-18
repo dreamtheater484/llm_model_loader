@@ -589,6 +589,32 @@ h2 {
   margin: 7px 0;
 }
 
+.modelScripts {
+  margin-top: 7px;
+}
+
+.modelScripts summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: #244760;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.modelScripts summary::-webkit-details-marker {
+  display: none;
+}
+
+.modelScriptsChevron {
+  transition: transform 150ms ease;
+}
+
+.modelScripts[open] .modelScriptsChevron {
+  transform: rotate(90deg);
+}
+
 .scriptItem {
   border-left: 3px solid #d7dee8;
 }
