@@ -522,7 +522,27 @@ h2 {
 }
 
 .modelBlock {
-  background: #f8fafc;
+  margin-top: 8px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #cbdce9;
+  border-radius: 8px;
+  background: #f7fafc;
+  box-shadow: inset 4px 0 0 #8fb6d1;
+}
+
+.modelBlock + .modelBlock {
+  margin-top: 10px;
+}
+
+.modelHead {
+  min-height: 56px;
+  padding: 8px 10px 8px 8px;
+  background: #edf5fa;
+}
+
+.modelHead > div > strong {
+  color: #153b56;
 }
 
 .modelBlock.dragging {
@@ -586,11 +606,13 @@ h2 {
 }
 
 .scripts {
-  margin: 7px 0;
+  margin: 7px 10px 7px 26px;
 }
 
 .modelScripts {
-  margin-top: 7px;
+  padding: 0 10px 9px 44px;
+  border-top: 1px solid #d8e5ee;
+  background: #fbfdfe;
 }
 
 .modelScripts summary {
@@ -601,6 +623,8 @@ h2 {
   cursor: pointer;
   list-style: none;
   user-select: none;
+  margin-top: 8px;
+  font-weight: 600;
 }
 
 .modelScripts summary::-webkit-details-marker {
@@ -616,11 +640,15 @@ h2 {
 }
 
 .scriptItem {
-  border-left: 3px solid #d7dee8;
+  overflow: hidden;
+  border: 1px solid #dbe3ea;
+  border-left: 3px solid #9fb8ca;
+  border-radius: 0 6px 6px 0;
+  background: #ffffff;
 }
 
 .scriptItem + .scriptItem {
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .scriptItem.editing {
@@ -630,7 +658,25 @@ h2 {
 
 .scriptRow {
   min-height: 38px;
-  padding: 5px 0 5px 12px;
+  padding: 6px 7px 6px 8px;
+}
+
+.scriptRow > .favoriteButton {
+  flex: 0 0 30px;
+  border-color: transparent;
+  color: #8291a1;
+  background: transparent;
+}
+
+.scriptRow > .favoriteButton:hover,
+.scriptRow > .favoriteButton.active {
+  color: #a66b00;
+  border-color: #ead8ad;
+  background: #fff8e8;
+}
+
+.scriptRow > .favoriteButton.active svg {
+  fill: currentColor;
 }
 
 .scriptEditor {
@@ -693,6 +739,82 @@ h2 {
 
 .runModel strong {
   overflow-wrap: anywhere;
+}
+
+.runModel > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.runModel small {
+  color: #667386;
+  font-size: 11px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.quickStartBand {
+  border-color: #e1d1a7;
+  background: #fffcf5;
+}
+
+.quickStartBand .sectionTitle {
+  color: #76510d;
+}
+
+.sectionCount {
+  min-width: 22px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f3e5bd;
+  color: #76510d;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.quickStartEmpty {
+  padding-bottom: 2px;
+}
+
+.quickStartGrid {
+  display: grid;
+  gap: 7px;
+}
+
+.quickStartItem {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 9px;
+  border: 1px solid #eadfbe;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #9a6809;
+}
+
+.quickStartItem > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.quickStartItem strong,
+.quickStartItem span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quickStartItem strong {
+  color: #25364a;
+}
+
+.quickStartItem span {
+  color: #6d7887;
+  font-size: 11px;
 }
 
 .runHead > .pill,
@@ -942,5 +1064,11 @@ h2 {
   }
   .fileGrid {
     margin-left: 0;
+  }
+  .modelScripts {
+    padding-left: 18px;
+  }
+  .scripts {
+    margin-left: 12px;
   }
 }

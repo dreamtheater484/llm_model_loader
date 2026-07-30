@@ -65,6 +65,7 @@ class Store:
                     raw_script text not null,
                     parsed_json text not null,
                     estimated_vram_mib integer,
+                    is_favorite integer not null default 0,
                     created_at real not null,
                     updated_at real not null,
                     foreign key(model_id) references models(id) on delete cascade
@@ -143,6 +144,9 @@ class Store:
             conn.execute("alter table runs add column status_message text")
         if "last_heartbeat_at" not in run_columns:
             conn.execute("alter table runs add column last_heartbeat_at real")
+        script_columns = {row["name"] for row in conn.execute("pragma table_info(scripts)").fetchall()}
+        if "is_favorite" not in script_columns:
+            conn.execute("alter table scripts add column is_favorite integer not null default 0")
 
     def _dedupe_models(self, conn: sqlite3.Connection) -> None:
         duplicate_groups = conn.execute(

@@ -30,6 +30,11 @@ class ScriptInfo:
     model_ref: str | None
     alias: str | None
     n_cpu_moe: int | None
+    fit: bool = False
+    gpu_layers: str | None = None
+    cache_type_k: str | None = None
+    cache_type_v: str | None = None
+    parallel: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -88,6 +93,11 @@ def parse_script(raw_script: str) -> ScriptInfo:
     model_ref = _value_after(args, "-m", "--model", "-hf", "-hfr", "--hf-repo")
     alias = _value_after(args, "--alias")
     n_cpu_moe = _value_after(args, "--n-cpu-moe")
+    fit_value = (_value_after(args, "--fit") or "").lower()
+    gpu_layers = _value_after(args, "-ngl", "--gpu-layers", "--n-gpu-layers")
+    cache_type_k = _value_after(args, "-ctk", "--cache-type-k")
+    cache_type_v = _value_after(args, "-ctv", "--cache-type-v")
+    parallel = _value_after(args, "-np", "--parallel")
     quant = detect_quantization(model_ref, alias, raw_script)
     flash_value = (_value_after(args, "-fa", "--flash-attn") or "").lower()
     flash = flash_value in {"on", "true", "1", "yes"}
@@ -104,7 +114,19 @@ def parse_script(raw_script: str) -> ScriptInfo:
         model_ref=model_ref,
         alias=alias,
         n_cpu_moe=int(n_cpu_moe) if n_cpu_moe and n_cpu_moe.isdigit() else None,
+        fit=fit_value in {"on", "true", "1", "yes"},
+        gpu_layers=gpu_layers,
+        cache_type_k=cache_type_k,
+        cache_type_v=cache_type_v,
+        parallel=int(parallel) if parallel and parallel.isdigit() else None,
     )
+
+
+def is_fit_managed(info: ScriptInfo | dict[str, Any]) -> bool:
+    """Return whether llama.cpp is responsible for choosing GPU residency."""
+    values = info if isinstance(info, dict) else info.to_dict()
+    layers = values.get("gpu_layers")
+    return bool(values.get("fit") and (layers is None or str(layers).lower() == "auto"))
 
 
 def autosuggest_name(model_name: str, raw_script: str) -> str:

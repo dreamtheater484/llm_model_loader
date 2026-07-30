@@ -41,6 +41,7 @@ import {
   Save,
   Search,
   Square,
+  Star,
   Trash2,
   Upload,
   X,
@@ -113,9 +114,9 @@ function Pill({ children, tone = "neutral" }) {
   return <span className={`pill ${tone}`}>{children}</span>;
 }
 
-function IconButton({ icon: Icon, label, ...props }) {
+function IconButton({ icon: Icon, label, className = "", ...props }) {
   return (
-    <button className="iconButton" title={label} aria-label={label} {...props}>
+    <button className={`iconButton ${className}`.trim()} title={label} aria-label={label} {...props}>
       <Icon size={15} />
     </button>
   );
@@ -602,13 +603,16 @@ function ScriptEditor({ model, reload, toast }) {
   );
 }
 
-function SavedScript({ model, script, start, removeScript, reload, toast, onEditingChange }) {
+function SavedScript({ model, script, start, removeScript, toggleFavorite, reload, toast, onEditingChange }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(script.name || "");
   const [raw, setRaw] = useState(script.raw_script || "");
   const [estimate, setEstimate] = useState(script.estimated_vram_mib ? String(script.estimated_vram_mib) : "");
   const [saving, setSaving] = useState(false);
-  const memoryLabel = script.parsed_json?.n_cpu_moe
+  const fitManaged = script.parsed_json?.fit && (!script.parsed_json?.gpu_layers || String(script.parsed_json.gpu_layers).toLowerCase() === "auto");
+  const memoryLabel = fitManaged
+    ? "VRAM auto-fit"
+    : script.parsed_json?.n_cpu_moe
     ? `MoE CPU/RAM (${script.parsed_json.n_cpu_moe} CPU experts)`
     : `${formatMib(script.estimated_vram_mib)} estimated`;
 
@@ -645,6 +649,14 @@ function SavedScript({ model, script, start, removeScript, reload, toast, onEdit
   return (
     <div className={`scriptItem ${editing ? "editing" : ""}`}>
       <div className="scriptRow">
+        <IconButton
+          icon={Star}
+          label={script.is_favorite ? "Remove script from favourites" : "Add script to favourites"}
+          className={`favoriteButton ${script.is_favorite ? "active" : ""}`}
+          aria-pressed={Boolean(script.is_favorite)}
+          onClick={() => toggleFavorite(model, script)}
+          disabled={editing}
+        />
         <div>
           <strong>{script.name}</strong>
           <span>{script.parsed_json?.ctx_size || "auto"} ctx / {script.parsed_json?.quantization || model.quantization || "quant?"} / {memoryLabel}</span>
@@ -703,6 +715,12 @@ function Library({ models, reload, toast }) {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
   const activeModel = orderedModels.find((model) => model.id === activeModelId);
+  const favoriteScripts = useMemo(
+    () => orderedModels.flatMap((model) => (model.scripts || [])
+      .filter((script) => script.is_favorite)
+      .map((script) => ({ model, script }))),
+    [orderedModels]
+  );
 
   useEffect(() => {
     setOrderedModels(models);
@@ -773,13 +791,52 @@ function Library({ models, reload, toast }) {
       toast(error.message);
     }
   }
+  async function toggleFavorite(model, script) {
+    try {
+      await request(`/api/models/${model.id}/scripts/${script.id}/favorite`, {
+        method: "PATCH",
+        body: JSON.stringify({ is_favorite: !script.is_favorite })
+      });
+      reload();
+      toast(script.is_favorite ? "Removed from favourites" : "Added to favourites");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
   return (
-    <section className="band">
-      <div className="sectionTitle">
-        <HardDrive size={16} />
-        <h2>Model Library</h2>
-      </div>
-      {!orderedModels.length && <div className="empty">Downloaded and imported models will appear here.</div>}
+    <>
+      <section className="band quickStartBand">
+        <div className="sectionTitle">
+          <Star size={16} />
+          <h2>Quick start favourite scripts</h2>
+          {!!favoriteScripts.length && <span className="sectionCount">{favoriteScripts.length}</span>}
+        </div>
+        {!favoriteScripts.length && (
+          <div className="empty quickStartEmpty">Star a loading script in the model library to keep it within easy reach.</div>
+        )}
+        {!!favoriteScripts.length && (
+          <div className="quickStartGrid">
+            {favoriteScripts.map(({ model, script }) => (
+              <div className="quickStartItem" key={script.id}>
+                <Star size={15} fill="currentColor" aria-hidden="true" />
+                <div>
+                  <strong>{script.name}</strong>
+                  <span>{model.name}</span>
+                </div>
+                <button className="primary" onClick={() => start(script.id)}>
+                  <Play size={14} /> Start
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      <section className="band modelLibraryBand">
+        <div className="sectionTitle">
+          <HardDrive size={16} />
+          <h2>Model Library</h2>
+        </div>
+        {!orderedModels.length && <div className="empty">Downloaded and imported models will appear here.</div>}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -827,6 +884,7 @@ function Library({ models, reload, toast }) {
                             script={script}
                             start={start}
                             removeScript={removeScript}
+                            toggleFavorite={toggleFavorite}
                             reload={reload}
                             toast={toast}
                             onEditingChange={(editing) => markScriptEditing(model.id, script.id, editing)}
@@ -845,7 +903,8 @@ function Library({ models, reload, toast }) {
           <ModelDragPreview model={activeModel} />
         </DragOverlay>
       </DndContext>
-    </section>
+      </section>
+    </>
   );
 }
 
@@ -909,13 +968,17 @@ function Runs({ runs, models, reload, toast }) {
         const message = statusMessage(run);
         const terminalText = compactLogTail(run.log_tail) || `[loader] ${message}`;
         const modelName = run.model_name || modelNames.get(run.model_id) || "Unknown model";
+        const scriptName = run.script_name || "Deleted script";
         return (
           <div className="runBlock" key={run.id}>
             <div className="runHead">
               <Pill tone={run.status}>{run.status}</Pill>
               <span className="runModel" title={modelName}>
                 <Cpu size={14} />
-                <strong>{modelName}</strong>
+                <span>
+                  <strong>{modelName}</strong>
+                  <small>Start script: {scriptName}</small>
+                </span>
               </span>
               {["loading", "orphaned"].includes(run.status) && <button onClick={() => action(run, "abort")}><Square size={14} /> Abort</button>}
               {run.status === "loaded" && <button onClick={() => action(run, "unload")}><Square size={14} /> Unload</button>}

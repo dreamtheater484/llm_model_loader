@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from backend.app.main import ModelOrderIn, update_model_order
-from backend.app.runs import RunManager
+from backend.app.main import ModelOrderIn, ScriptFavoriteIn, update_model_order, update_script_favorite
+from backend.app.runs import RunManager, _with_loader_defaults
 from backend.app.storage import Store
 
 
@@ -67,16 +67,56 @@ class ModelOrderTests(unittest.TestCase):
 
 
 class RunHistoryTests(unittest.TestCase):
-    def test_list_includes_model_name(self):
+    def test_llama_cpp_ui_statistics_are_enabled_by_default(self):
+        self.assertEqual(
+            _with_loader_defaults(["--model", "model.gguf"]),
+            [
+                "--model",
+                "model.gguf",
+                "--perf",
+                "--ui-config",
+                '{"showMessageStats":true}',
+            ],
+        )
+
+    def test_explicit_perf_and_ui_choices_are_preserved(self):
+        for flag in ("--perf", "--no-perf"):
+            args = [
+                "--model",
+                "model.gguf",
+                flag,
+                "--ui-config",
+                '{"showMessageStats":false}',
+            ]
+            with self.subTest(flag=flag):
+                self.assertIs(_with_loader_defaults(args), args)
+
+    def test_list_includes_model_and_script_names(self):
         manager = RunManager()
         seen = []
 
         with patch.object(manager, "reconcile_stale_runs"):
-            with patch("backend.app.runs.store.rows", side_effect=lambda query, params=(): seen.append(query) or [{"id": "run_1", "model_name": "Qwen"}]):
+            with patch("backend.app.runs.store.rows", side_effect=lambda query, params=(): seen.append(query) or [{"id": "run_1", "model_name": "Qwen", "script_name": "128k performance"}]):
                 result = manager.list()
 
         self.assertEqual(result[0]["model_name"], "Qwen")
+        self.assertEqual(result[0]["script_name"], "128k performance")
         self.assertIn("left join models", seen[0])
+        self.assertIn("left join scripts", seen[0])
+
+    def test_script_favorite_is_persisted(self):
+        executed = []
+        rows = [
+            {"id": "script_1", "model_id": "model_1", "is_favorite": 0},
+            {"id": "script_1", "model_id": "model_1", "is_favorite": 1},
+        ]
+        with patch("backend.app.main.store.row", side_effect=rows):
+            with patch("backend.app.main.store.execute", side_effect=lambda query, params=(): executed.append(tuple(params))):
+                result = update_script_favorite("model_1", "script_1", ScriptFavoriteIn(is_favorite=True))
+
+        self.assertEqual(result["is_favorite"], 1)
+        self.assertEqual(executed[0][0], 1)
+        self.assertEqual(executed[0][2], "script_1")
 
     def test_delete_history_removes_only_inactive_runs(self):
         manager = RunManager()
@@ -94,6 +134,68 @@ class RunHistoryTests(unittest.TestCase):
         self.assertNotIn("failed_1", manager._processes)
         self.assertIn("loaded_1", manager._processes)
         self.assertEqual(executed[0][1], ("failed_1", "unloaded_1"))
+
+    def test_launch_plan_prefers_script_runtime_and_delegates_fit(self):
+        manager = RunManager()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script_runtime = root / "prism-llama-server.exe"
+            global_runtime = root / "stock-llama-server.exe"
+            script_runtime.write_bytes(b"runtime")
+            global_runtime.write_bytes(b"runtime")
+            script = {
+                "id": "script_1",
+                "model_id": "model_1",
+                "raw_script": f'& "{script_runtime}" -m "model.gguf" --fit on -ngl auto -c 131072',
+                "parsed_json": {},
+                "estimated_vram_mib": None,
+            }
+            model = {"id": "model_1", "path": "model.gguf", "size_bytes": 7 * 1024 * 1024 * 1024}
+            with patch("backend.app.runs.store.row", side_effect=[script, model]):
+                with patch("backend.app.runs.store.setting", return_value=str(global_runtime)):
+                    with patch("backend.app.runs.query_gpus", return_value=[{"memory_free_mib": 4096}]):
+                        plan = manager._launch_plan("script_1")
+            self.assertEqual(plan["llama_server"], str(script_runtime.resolve()))
+            self.assertIsNone(plan["estimated_vram_mib"])
+            self.assertIn("delegated", plan["vram_reason"])
+
+    def test_launch_plan_uses_global_runtime_when_script_has_none(self):
+        manager = RunManager()
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "stock-llama-server.exe"
+            runtime.write_bytes(b"runtime")
+            script = {
+                "id": "script_1",
+                "model_id": "model_1",
+                "raw_script": '-m "model.gguf" -ngl 99 -c 4096',
+                "parsed_json": {},
+                "estimated_vram_mib": None,
+            }
+            model = {"id": "model_1", "path": "model.gguf", "size_bytes": 1024 * 1024}
+            with patch("backend.app.runs.store.row", side_effect=[script, model]):
+                with patch("backend.app.runs.store.setting", return_value=str(runtime)):
+                    with patch("backend.app.runs.query_gpus", return_value=[{"memory_free_mib": 4096}]):
+                        plan = manager._launch_plan("script_1")
+            self.assertEqual(plan["llama_server"], str(runtime.resolve()))
+
+    def test_fixed_gpu_layers_keep_vram_gate(self):
+        manager = RunManager()
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "llama-server.exe"
+            runtime.write_bytes(b"runtime")
+            script = {
+                "id": "script_1",
+                "model_id": "model_1",
+                "raw_script": f'& "{runtime}" -m "model.gguf" --fit on -ngl 99 -c 131072',
+                "parsed_json": {},
+                "estimated_vram_mib": None,
+            }
+            model = {"id": "model_1", "path": "model.gguf", "size_bytes": 7 * 1024 * 1024 * 1024}
+            with patch("backend.app.runs.store.row", side_effect=[script, model]):
+                with patch("backend.app.runs.store.setting", return_value=str(runtime)):
+                    with patch("backend.app.runs.query_gpus", return_value=[{"memory_free_mib": 4096}]):
+                        with self.assertRaises(ValueError):
+                            manager._launch_plan("script_1")
 
 
 if __name__ == "__main__":

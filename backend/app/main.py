@@ -21,7 +21,7 @@ from .gpu import query_gpus
 from .hf import model_files, search_models
 from .llamacpp import discover_llama_server, resolve_llama_server_path, validate_llama_server
 from .runs import run_manager
-from .scripts import autosuggest_name, estimate_vram_mib, parse_script
+from .scripts import autosuggest_name, estimate_vram_mib, is_fit_managed, parse_script
 from .storage import decode_json_field, new_id, normalize_path, now, store
 from .system import telemetry
 
@@ -60,6 +60,10 @@ class ScriptIn(BaseModel):
     estimated_vram_mib: int | None = None
 
 
+class ScriptFavoriteIn(BaseModel):
+    is_favorite: bool
+
+
 class StartRunIn(BaseModel):
     script_id: str
     manual_vram_mib: int | None = None
@@ -83,7 +87,7 @@ def _model_rows() -> list[dict[str, Any]]:
         for row in store.rows("select * from scripts where model_id=? order by created_at desc", (model["id"],)):
             parsed = parse_script(row["raw_script"]).to_dict()
             row["parsed_json"] = parsed
-            if parsed.get("n_cpu_moe"):
+            if parsed.get("n_cpu_moe") or is_fit_managed(parsed):
                 row["estimated_vram_mib"] = None
             scripts.append(row)
         model["scripts"] = scripts
@@ -276,7 +280,7 @@ def create_script(model_id: str, body: ScriptIn) -> dict[str, Any]:
     if not model:
         raise HTTPException(status_code=404, detail="Model not found.")
     parsed = parse_script(body.raw_script).to_dict()
-    estimate = body.estimated_vram_mib or estimate_vram_mib(model.get("size_bytes"), parsed.get("ctx_size"), n_cpu_moe=parsed.get("n_cpu_moe"))
+    estimate = None if is_fit_managed(parsed) else body.estimated_vram_mib or estimate_vram_mib(model.get("size_bytes"), parsed.get("ctx_size"), n_cpu_moe=parsed.get("n_cpu_moe"))
     script_id = new_id("script")
     name = body.name or autosuggest_name(model["name"], body.raw_script)
     store.execute(
@@ -296,12 +300,24 @@ def update_script(model_id: str, script_id: str, body: ScriptIn) -> dict[str, An
         raise HTTPException(status_code=404, detail="Script not found.")
     model = store.row("select * from models where id=?", (model_id,))
     parsed = parse_script(body.raw_script).to_dict()
-    estimate = body.estimated_vram_mib or estimate_vram_mib((model or {}).get("size_bytes"), parsed.get("ctx_size"), n_cpu_moe=parsed.get("n_cpu_moe"))
+    estimate = None if is_fit_managed(parsed) else body.estimated_vram_mib or estimate_vram_mib((model or {}).get("size_bytes"), parsed.get("ctx_size"), n_cpu_moe=parsed.get("n_cpu_moe"))
     store.execute(
         "update scripts set name=?, raw_script=?, parsed_json=?, estimated_vram_mib=?, updated_at=? where id=?",
         (body.name or autosuggest_name((model or {}).get("name", ""), body.raw_script), body.raw_script, json.dumps(parsed), estimate, now(), script_id),
     )
     return decode_json_field(store.row("select * from scripts where id=?", (script_id,)) or {"id": script_id}, "parsed_json")
+
+
+@app.patch("/api/models/{model_id}/scripts/{script_id}/favorite")
+def update_script_favorite(model_id: str, script_id: str, body: ScriptFavoriteIn) -> dict[str, Any]:
+    script = store.row("select * from scripts where id=? and model_id=?", (script_id, model_id))
+    if not script:
+        raise HTTPException(status_code=404, detail="Script not found.")
+    store.execute(
+        "update scripts set is_favorite=?, updated_at=? where id=?",
+        (int(body.is_favorite), now(), script_id),
+    )
+    return store.row("select * from scripts where id=?", (script_id,)) or {"id": script_id}
 
 
 @app.delete("/api/models/{model_id}/scripts/{script_id}")

@@ -12,8 +12,18 @@ from typing import Any
 from .events import event_hub
 from .gpu import query_gpus
 from .llamacpp import resolve_llama_server_path
-from .scripts import can_fit_vram, estimate_vram_mib, parse_script
+from .scripts import can_fit_vram, estimate_vram_mib, is_fit_managed, parse_script
 from .storage import decode_json_field, new_id, now, store
+
+
+def _with_loader_defaults(args: list[str]) -> list[str]:
+    result = args
+    if "--perf" not in result and "--no-perf" not in result:
+        result = [*result, "--perf"]
+    ui_config_flags = {"--ui-config", "--webui-config", "--ui-config-file", "--webui-config-file"}
+    if not any(flag in result for flag in ui_config_flags):
+        result = [*result, "--ui-config", '{"showMessageStats":true}']
+    return result
 
 
 class RunManager:
@@ -36,9 +46,10 @@ class RunManager:
         self.reconcile_stale_runs()
         return store.rows(
             """
-            select r.*, m.name as model_name
+            select r.*, m.name as model_name, s.name as script_name
             from runs r
             left join models m on m.id = r.model_id
+            left join scripts s on s.id = r.script_id
             order by r.started_at desc
             limit 20
             """
@@ -134,23 +145,28 @@ class RunManager:
         parsed = parse_script(script["raw_script"]).to_dict()
         manual = manual_vram_mib or model.get("manual_vram_mib")
         is_moe_cpu = bool(parsed.get("n_cpu_moe"))
+        fit_managed = is_fit_managed(parsed)
         estimate = None
-        if not (is_moe_cpu and not manual):
+        if not fit_managed and not (is_moe_cpu and not manual):
             estimate = script.get("estimated_vram_mib") or estimate_vram_mib(
                 model.get("size_bytes"),
                 parsed.get("ctx_size"),
                 n_cpu_moe=parsed.get("n_cpu_moe"),
             )
-        allow_unknown = bool(is_moe_cpu and not manual)
-        ok, reason = can_fit_vram(free_mib, estimate, manual, allow_unknown=allow_unknown)
+        allow_unknown = bool((is_moe_cpu and not manual) or fit_managed)
+        if fit_managed:
+            ok, reason = True, "VRAM gate delegated to llama.cpp --fit; model layers will be adjusted automatically."
+        else:
+            ok, reason = can_fit_vram(free_mib, estimate, manual, allow_unknown=allow_unknown)
         if not ok:
             raise ValueError(reason)
-        llama_server = resolve_llama_server_path(store.setting("llama_server_path") or script["parsed_json"].get("executable") or "")
+        script_executable = parsed.get("executable") or (script.get("parsed_json") or {}).get("executable")
+        llama_server = resolve_llama_server_path(script_executable or store.setting("llama_server_path") or "")
         if not llama_server:
             raise ValueError("Configure llama-server.exe before starting a script.")
         if not os.path.exists(llama_server):
             raise ValueError(f"llama-server.exe was not found: {llama_server}")
-        parsed_args = parsed["args"]
+        parsed_args = _with_loader_defaults(parsed["args"])
         args = [llama_server] + parsed_args
         return {
             "script": script,

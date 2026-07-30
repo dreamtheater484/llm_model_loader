@@ -43,10 +43,11 @@ def port_available(host: str, port: int) -> bool:
 def select_port(host: str, preferred: int) -> int:
     if port_available(host, preferred):
         return preferred
-    for port in range(preferred + 1, preferred + 20):
-        if port_available(host, port):
-            return port
-    raise SystemExit(f"No free port found from {preferred} through {preferred + 19}.")
+    raise SystemExit(
+        f"Port {preferred} is already in use on {host}.\n"
+        f"If LLM Model Loader is already running, open http://{host}:{preferred} instead. "
+        "Stop the existing process before starting a fresh backend."
+    )
 
 
 if __name__ == "__main__":

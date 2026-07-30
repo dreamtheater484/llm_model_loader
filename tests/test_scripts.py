@@ -1,6 +1,6 @@
 import unittest
 
-from backend.app.scripts import autosuggest_name, can_fit_vram, detect_quantization, estimate_vram_mib, parse_script
+from backend.app.scripts import autosuggest_name, can_fit_vram, detect_quantization, estimate_vram_mib, is_fit_managed, parse_script
 
 
 SCRIPT = """& "$env:USERPROFILE\\AI\\qwen36-35b-llamacpp\\llama.cpp\\llama-server.exe" `
@@ -44,6 +44,19 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(info.executable, "C:\\Users\\Roy\\AI\\llama.cpp\\llama-server.exe")
         self.assertEqual(info.args[0], "-m")
         self.assertNotIn("llama-server.exe", info.args[0])
+
+    def test_parse_script_extracts_fit_and_cache_settings(self):
+        raw = "--fit on -ngl auto -ctk q4_0 -ctv q4_0 -np 1"
+        info = parse_script(raw)
+        self.assertTrue(info.fit)
+        self.assertEqual(info.gpu_layers, "auto")
+        self.assertEqual(info.cache_type_k, "q4_0")
+        self.assertEqual(info.cache_type_v, "q4_0")
+        self.assertEqual(info.parallel, 1)
+        self.assertTrue(is_fit_managed(info))
+
+    def test_fixed_gpu_layers_are_not_fit_managed(self):
+        self.assertFalse(is_fit_managed(parse_script("--fit on -ngl 99")))
 
     def test_autosuggest_name(self):
         name = autosuggest_name("Qwen3.6 27B", SCRIPT)
