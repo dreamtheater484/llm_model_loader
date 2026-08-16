@@ -147,6 +147,11 @@ class Store:
         script_columns = {row["name"] for row in conn.execute("pragma table_info(scripts)").fetchall()}
         if "is_favorite" not in script_columns:
             conn.execute("alter table scripts add column is_favorite integer not null default 0")
+        download_columns = {row["name"] for row in conn.execute("pragma table_info(downloads)").fetchall()}
+        if "group_id" not in download_columns:
+            conn.execute("alter table downloads add column group_id text")
+        if "group_primary" not in download_columns:
+            conn.execute("alter table downloads add column group_primary integer not null default 1")
 
     def _dedupe_models(self, conn: sqlite3.Connection) -> None:
         duplicate_groups = conn.execute(

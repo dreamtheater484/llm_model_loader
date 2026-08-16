@@ -11,6 +11,7 @@ from typing import Any
 from .events import event_hub
 from .gguf import inspect_model_file
 from .scripts import detect_quantization
+from .shards import model_name_from_filename
 from .storage import new_id, normalize_path, now, store
 
 
@@ -19,8 +20,34 @@ class DownloadManager:
         self._cancel: set[str] = set()
         self._active: set[str] = set()
         self._lock = threading.Lock()
+        self._registration_lock = threading.Lock()
 
     def start(self, repo_id: str, filename: str, target_dir: str | None = None) -> dict[str, Any]:
+        download = self._queue(repo_id, filename, target_dir)
+        self._start_thread(download["id"])
+        return self.get(download["id"]) or download
+
+    def start_group(self, repo_id: str, filenames: list[str], primary_filename: str, target_dir: str | None = None) -> list[dict[str, Any]]:
+        unique_filenames = list(dict.fromkeys(filenames))
+        if not unique_filenames or primary_filename not in unique_filenames:
+            raise ValueError("A download group must include its primary file.")
+        group_id = new_id("group")
+        downloads = [
+            self._queue(repo_id, filename, target_dir, group_id, filename == primary_filename)
+            for filename in unique_filenames
+        ]
+        for download in downloads:
+            self._start_thread(download["id"])
+        return [self.get(download["id"]) or download for download in downloads]
+
+    def _queue(
+        self,
+        repo_id: str,
+        filename: str,
+        target_dir: str | None = None,
+        group_id: str | None = None,
+        group_primary: bool = True,
+    ) -> dict[str, Any]:
         model_dir = Path(target_dir or store.setting("model_dir"))
         model_dir.mkdir(parents=True, exist_ok=True)
         safe_name = filename.replace("/", "__").replace("\\", "__")
@@ -30,12 +57,11 @@ class DownloadManager:
         download_id = new_id("dl")
         store.execute(
             """
-            insert into downloads(id, repo_id, filename, url, target_path, status, started_at)
-            values(?, ?, ?, ?, ?, 'queued', ?)
+            insert into downloads(id, repo_id, filename, url, target_path, status, started_at, group_id, group_primary)
+            values(?, ?, ?, ?, ?, 'queued', ?, ?, ?)
             """,
-            (download_id, repo_id, filename, url, str(target_path), now()),
+            (download_id, repo_id, filename, url, str(target_path), now(), group_id, int(group_primary)),
         )
-        self._start_thread(download_id)
         return self.get(download_id) or {"id": download_id}
 
     def cancel(self, download_id: str) -> None:
@@ -187,6 +213,28 @@ class DownloadManager:
         row = self.get(download_id)
         if not row:
             return
+        store.execute(
+            "update downloads set status='completed', bytes_done=?, bytes_total=?, finished_at=?, error=null where id=?",
+            (bytes_done, bytes_done, now(), download_id),
+        )
+        if row.get("group_id"):
+            self._register_completed_group(row["group_id"])
+        else:
+            self._register_model(row, target, bytes_done)
+        event_hub.publish_threadsafe("download", self.get(download_id) or {})
+
+    def _register_completed_group(self, group_id: str) -> None:
+        with self._registration_lock:
+            rows = store.rows("select * from downloads where group_id=?", (group_id,))
+            if not rows or any(row["status"] != "completed" for row in rows):
+                return
+            primary = next((row for row in rows if row.get("group_primary")), None)
+            if not primary:
+                return
+            total_size = sum(int(row.get("bytes_done") or 0) for row in rows)
+            self._register_model(primary, Path(primary["target_path"]), total_size)
+
+    def _register_model(self, row: dict[str, Any], target: Path, size_bytes: int) -> None:
         meta = inspect_model_file(str(target))
         normalized_path = normalize_path(str(target))
         existing = store.row("select id from models where normalized_path = ?", (normalized_path,))
@@ -199,21 +247,16 @@ class DownloadManager:
                 """,
                 (
                     model_id,
-                    Path(row["filename"]).stem,
+                    model_name_from_filename(row["filename"]),
                     row["repo_id"],
                     row["filename"],
                     str(target),
                     normalized_path,
-                    meta["size_bytes"],
+                    size_bytes,
                     meta["quantization"] or detect_quantization(row["filename"]),
                     now(),
                 ),
             )
-        store.execute(
-            "update downloads set status='completed', bytes_done=?, bytes_total=?, finished_at=?, error=null where id=?",
-            (bytes_done, bytes_done, now(), download_id),
-        )
-        event_hub.publish_threadsafe("download", self.get(download_id) or {})
 
 
 download_manager = DownloadManager()

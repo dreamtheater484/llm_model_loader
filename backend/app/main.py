@@ -22,6 +22,7 @@ from .hf import model_files, search_models
 from .llamacpp import discover_llama_server, resolve_llama_server_path, validate_llama_server
 from .runs import run_manager
 from .scripts import autosuggest_name, estimate_vram_mib, is_fit_managed, parse_script
+from .shards import local_model_files, parse_gguf_shard
 from .storage import decode_json_field, new_id, normalize_path, now, store
 from .system import telemetry
 
@@ -44,6 +45,7 @@ class SettingsIn(BaseModel):
 class DownloadIn(BaseModel):
     repo_id: str
     filename: str
+    filenames: list[str] | None = None
     target_dir: str | None = None
 
 
@@ -83,6 +85,8 @@ class ModelOrderIn(BaseModel):
 def _model_rows() -> list[dict[str, Any]]:
     models = store.rows("select * from models order by display_order asc, created_at desc")
     for model in models:
+        shard = parse_gguf_shard(model.get("filename") or Path(model["path"]).name)
+        model["shard_count"] = shard.count if shard else 1
         scripts = []
         for row in store.rows("select * from scripts where model_id=? order by created_at desc", (model["id"],)):
             parsed = parse_script(row["raw_script"]).to_dict()
@@ -160,6 +164,12 @@ def hf_files(repo_id: str) -> list[dict[str, Any]]:
 
 @app.post("/api/downloads")
 def create_download(body: DownloadIn) -> dict[str, Any]:
+    if body.filenames and len(body.filenames) > 1:
+        try:
+            downloads = download_manager.start_group(body.repo_id, body.filenames, body.filename, body.target_dir)
+            return {"downloads": downloads}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     return download_manager.start(body.repo_id, body.filename, body.target_dir)
 
 
@@ -263,12 +273,13 @@ def delete_model(model_id: str, force: bool = False) -> dict[str, Any]:
     if not model:
         raise HTTPException(status_code=404, detail="Model not found.")
     if model["managed"] or force:
-        path = Path(model["path"])
         managed_root = Path(store.setting("model_dir")).resolve()
-        if path.exists():
+        paths = [path for path in local_model_files(model["path"]) if path.exists()]
+        for path in paths:
             resolved = path.resolve()
             if not force and managed_root not in resolved.parents and resolved != managed_root:
                 raise HTTPException(status_code=400, detail="Refusing to delete a file outside the managed model directory.")
+        for path in paths:
             path.unlink()
     store.execute("delete from models where id=?", (model_id,))
     return {"ok": True}

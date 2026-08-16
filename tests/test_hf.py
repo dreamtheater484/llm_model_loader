@@ -31,6 +31,31 @@ class HuggingFaceFileTests(unittest.TestCase):
         self.assertEqual(files[1]["size_bytes"], 18_990_663_040)
         self.assertEqual(files[1]["quantization"], "Q5_K_S")
 
+    def test_split_files_are_one_aggregated_variant(self):
+        payload = [
+            {"type": "file", "path": "Q3/Model-Q3_K_M-00003-of-00003.gguf", "size": 30},
+            {"type": "file", "path": "Q3/Model-Q3_K_M-00001-of-00003.gguf", "size": 10},
+            {"type": "file", "path": "Q3/Model-Q3_K_M-00002-of-00003.gguf", "size": 20},
+        ]
+
+        with patch("backend.app.hf._get_json", return_value=payload):
+            files = model_files("author/repo")
+
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0]["filename"], "Q3/Model-Q3_K_M-00001-of-00003.gguf")
+        self.assertEqual(files[0]["display_name"], "Q3/Model-Q3_K_M.gguf")
+        self.assertEqual(
+            files[0]["filenames"],
+            [
+                "Q3/Model-Q3_K_M-00001-of-00003.gguf",
+                "Q3/Model-Q3_K_M-00002-of-00003.gguf",
+                "Q3/Model-Q3_K_M-00003-of-00003.gguf",
+            ],
+        )
+        self.assertEqual(files[0]["shard_count"], 3)
+        self.assertEqual(files[0]["size_bytes"], 60)
+        self.assertTrue(files[0]["complete"])
+
 
 if __name__ == "__main__":
     unittest.main()

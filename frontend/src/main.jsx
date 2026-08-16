@@ -301,10 +301,13 @@ function Discover({ toast, reload, telemetry }) {
     }
   }
 
-  async function download(repo, filename) {
+  async function download(repo, file) {
     try {
-      await request("/api/downloads", { method: "POST", body: JSON.stringify({ repo_id: repo, filename }) });
-      toast("Download queued");
+      await request("/api/downloads", {
+        method: "POST",
+        body: JSON.stringify({ repo_id: repo, filename: file.filename, filenames: file.filenames })
+      });
+      toast(file.shard_count > 1 ? `All ${file.shard_count} parts queued` : "Download queued");
       reload();
     } catch (error) {
       toast(error.message);
@@ -366,14 +369,19 @@ function Discover({ toast, reload, telemetry }) {
                 {!loadingFiles[result.repo_id] && !files[result.repo_id]?.length && <div className="empty">No GGUF files found for this repository.</div>}
                 {files[result.repo_id]?.map((file) => (
                   <div className="row fileGrid" key={`${result.repo_id}-${file.filename}`}>
-                    <span>{file.filename}</span>
+                    <span>
+                      {file.display_name || file.filename}
+                      {file.shard_count > 1 && <small>{file.shard_count} parts</small>}
+                    </span>
                     <span>{file.quantization || "unknown"}</span>
                     <strong>{formatBytes(file.size_bytes)}</strong>
                     <span className="vramEstimate">
                       {file.estimated_vram_mib ? formatMib(file.estimated_vram_mib) : "unknown"}
                       <Pill tone={fitTone(file)}>{fitLabel(file)}</Pill>
                     </span>
-                    <button className="primary" onClick={() => download(result.repo_id, file.filename)}><Download size={14} /> Download</button>
+                    <button className="primary" disabled={!file.complete} onClick={() => download(result.repo_id, file)}>
+                      <Download size={14} /> {file.shard_count > 1 ? "Download all" : "Download"}
+                    </button>
                   </div>
                 ))}
               </div>
@@ -867,7 +875,10 @@ function Library({ models, reload, toast }) {
                       </button>
                       <div>
                         <strong>{model.name}</strong>
-                        <span>{model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)} / {model.path}</span>
+                        <span>
+                          {model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)}
+                          {model.shard_count > 1 ? ` / ${model.shard_count} parts` : ""} / {model.path}
+                        </span>
                       </div>
                       <IconButton icon={Trash2} label="Delete model" onClick={() => remove(model)} />
                     </div>

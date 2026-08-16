@@ -521,6 +521,12 @@ h2 {
   padding: 9px 0;
 }
 
+.fileGrid > span:first-child small {
+  display: block;
+  margin-top: 2px;
+  color: #687586;
+}
+
 .modelBlock {
   margin-top: 8px;
   padding: 0;
