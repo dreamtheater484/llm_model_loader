@@ -18,6 +18,12 @@ from .storage import decode_json_field, new_id, now, store
 
 def _with_loader_defaults(args: list[str]) -> list[str]:
     result = args
+    # Expose every loaded model on the LAN by default. llama-server binds to
+    # 127.0.0.1 unless told otherwise, so inject --host 0.0.0.0 when the script
+    # does not set a host explicitly. The stored/probed host stays 127.0.0.1
+    # (see _launch_plan / _watch) because 0.0.0.0 is not a valid connect target.
+    if not any(a == "--host" or a.startswith("--host=") for a in result):
+        result = [*result, "--host", "0.0.0.0"]
     if "--perf" not in result and "--no-perf" not in result:
         result = [*result, "--perf"]
     ui_config_flags = {"--ui-config", "--webui-config", "--ui-config-file", "--webui-config-file"}
@@ -128,7 +134,7 @@ class RunManager:
         store.execute("update runs set pid=? where id=?", (process.pid, run_id))
         self._append_log(run_id, f"[loader] Starting llama-server PID {process.pid}.")
         self._append_log(run_id, f"[loader] Executable: {plan['llama_server']}")
-        self._append_log(run_id, f"[loader] Health check: http://{parsed.get('host') or '127.0.0.1'}:{parsed.get('port') or 8080}/health")
+        self._append_log(run_id, f"[loader] Health check: http://{self._probe_host(parsed.get('host'))}:{parsed.get('port') or 8080}/health")
         threading.Thread(target=self._watch, args=(run_id, process), daemon=True).start()
         return store.row("select * from runs where id=?", (run_id,)) or {"id": run_id}
 
@@ -334,7 +340,16 @@ class RunManager:
         return f"{seconds}s"
 
     @staticmethod
+    def _probe_host(host: str | None) -> str:
+        # Wildcard bind addresses accept connections but are not valid connect
+        # targets (especially on Windows). Probe them via loopback instead.
+        if not host or host in {"0.0.0.0", "::", "[::]", "*"}:
+            return "127.0.0.1"
+        return host
+
+    @staticmethod
     def _health(host: str, port: int) -> bool:
+        host = RunManager._probe_host(host)
         try:
             with urllib.request.urlopen(f"http://{host}:{port}/health", timeout=0.5) as response:
                 return 200 <= response.status < 300

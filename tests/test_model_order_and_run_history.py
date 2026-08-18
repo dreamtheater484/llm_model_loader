@@ -73,17 +73,36 @@ class RunHistoryTests(unittest.TestCase):
             [
                 "--model",
                 "model.gguf",
+                "--host",
+                "0.0.0.0",
                 "--perf",
                 "--ui-config",
                 '{"showMessageStats":true}',
             ],
         )
 
+    def test_models_are_exposed_on_the_lan_by_default(self):
+        self.assertIn("--host", _with_loader_defaults(["--model", "model.gguf"]))
+        result = _with_loader_defaults(["--model", "model.gguf"])
+        self.assertEqual(result[result.index("--host") + 1], "0.0.0.0")
+
+    def test_explicit_host_is_preserved(self):
+        for args in (
+            ["--model", "model.gguf", "--host", "127.0.0.1"],
+            ["--model", "model.gguf", "--host=192.168.1.50"],
+        ):
+            with self.subTest(args=args):
+                result = _with_loader_defaults(args)
+                self.assertEqual(result.count("--host"), args.count("--host"))
+                self.assertNotIn("0.0.0.0", result)
+
     def test_explicit_perf_and_ui_choices_are_preserved(self):
         for flag in ("--perf", "--no-perf"):
             args = [
                 "--model",
                 "model.gguf",
+                "--host",
+                "127.0.0.1",
                 flag,
                 "--ui-config",
                 '{"showMessageStats":false}',
