@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .config import DB_PATH, default_model_dir
+from .shards import model_name_from_filename, parse_gguf_shard
 
 
 class Store:
@@ -152,6 +153,55 @@ class Store:
             conn.execute("alter table downloads add column group_id text")
         if "group_primary" not in download_columns:
             conn.execute("alter table downloads add column group_primary integer not null default 1")
+        self._consolidate_sharded_models(conn)
+
+    def _consolidate_sharded_models(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("pragma table_info(models)").fetchall()}
+        required = {"id", "repo_id", "filename", "path", "size_bytes", "display_order", "created_at"}
+        if not required.issubset(columns):
+            return
+
+        groups: dict[tuple[str, str, str, int], list[tuple[int, sqlite3.Row]]] = {}
+        rows = conn.execute("select * from models where filename is not null and filename != ''").fetchall()
+        for row in rows:
+            shard = parse_gguf_shard(row["filename"])
+            if not shard or shard.index < 1 or shard.index > shard.count:
+                continue
+            key = (
+                (row["repo_id"] or "").casefold(),
+                normalize_path(str(Path(row["path"]).parent)),
+                shard.base.casefold(),
+                shard.count,
+            )
+            groups.setdefault(key, []).append((shard.index, row))
+
+        changed = False
+        for (_, _, _, shard_count), members in groups.items():
+            indexes = [index for index, _ in members]
+            if sorted(indexes) != list(range(1, shard_count + 1)):
+                continue
+            primary = next(row for index, row in members if index == 1)
+            duplicates = [row for index, row in members if index != 1]
+            total_size = sum(int(row["size_bytes"] or 0) for _, row in members)
+            positions = [int(row["display_order"]) for _, row in members if row["display_order"] is not None]
+            display_order = min(positions) if positions else None
+            conn.execute(
+                "update models set name=?, size_bytes=?, display_order=? where id=?",
+                (model_name_from_filename(primary["filename"]), total_size, display_order, primary["id"]),
+            )
+            for duplicate in duplicates:
+                conn.execute("update scripts set model_id=? where model_id=?", (primary["id"], duplicate["id"]))
+                conn.execute("update runs set model_id=? where model_id=?", (primary["id"], duplicate["id"]))
+                conn.execute("update benchmark_runs set model_id=? where model_id=?", (primary["id"], duplicate["id"]))
+                conn.execute("delete from models where id=?", (duplicate["id"],))
+            changed = True
+
+        if changed:
+            ordered = conn.execute(
+                "select id from models order by display_order asc, created_at desc, id asc"
+            ).fetchall()
+            for index, row in enumerate(ordered):
+                conn.execute("update models set display_order=? where id=?", (index, row["id"]))
 
     def _dedupe_models(self, conn: sqlite3.Connection) -> None:
         duplicate_groups = conn.execute(
