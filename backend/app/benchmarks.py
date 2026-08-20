@@ -88,21 +88,33 @@ class BenchmarkManager:
         return store.row("select * from benchmark_runs where id=?", (bench_id,)) or {"id": bench_id}
 
     def _run(self, bench_id: str, script: dict[str, Any], prompt: str, max_tokens: int) -> None:
-        host = script["parsed_json"].get("host") or "127.0.0.1"
-        port = script["parsed_json"].get("port") or 8080
-        url = f"http://{host}:{port}/v1/chat/completions"
         parsed = script["parsed_json"]
+        host = parsed.get("host") or "127.0.0.1"
+        if host in {"0.0.0.0", "::", "[::]", "*"}:
+            host = "127.0.0.1"
+        port = parsed.get("port") or 8080
+        url = f"http://{host}:{port}/v1/chat/completions"
         model = parsed.get("alias") or parsed.get("model_ref") or "default"
-        request_payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-            "stream": True,
-            "temperature": 0,
-            "timings_per_token": True,
-            "chat_template_kwargs": {"enable_thinking": False},
-            "reasoning_format": "deepseek",
-        }
+        if parsed.get("runtime") == "ninfer":
+            # NInfer serves an OpenAI-compatible API; llama.cpp-only fields are dropped.
+            request_payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "stream": True,
+                "temperature": 0,
+            }
+        else:
+            request_payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "stream": True,
+                "temperature": 0,
+                "timings_per_token": True,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "reasoning_format": "deepseek",
+            }
         payload = json.dumps(request_payload).encode("utf-8")
         request = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
         started = time.time()

@@ -329,6 +329,21 @@ h2 {
   max-width: 100%;
 }
 
+.fileEntry.ninfer {
+  background: #f8f5fd;
+}
+
+.fileEntry.ninfer:hover {
+  background: #f1ebfb;
+  border-color: #d9c8f0;
+}
+
+.fileEntry .fileMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .inlineError {
   padding: 7px 9px;
   color: #9b2d20;
@@ -497,6 +512,11 @@ h2 {
   color: #9b2d20;
 }
 
+.pill.ninfer {
+  background: #f0eafc;
+  color: #5b3f9e;
+}
+
 .progress {
   width: 100%;
   height: 6px;
@@ -547,7 +567,25 @@ h2 {
   background: #edf5fa;
 }
 
-.modelHead > div > strong {
+.modelBlock.ninfer {
+  border-color: #d9c8f0;
+  background: #fbf9fe;
+  box-shadow: inset 4px 0 0 #9c7bd4;
+}
+
+.modelBlock.ninfer .modelHead {
+  background: #f2edfb;
+}
+
+.modelHead span.modelTitleLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: inherit;
+  color: inherit;
+}
+
+.modelHead strong {
   color: #153b56;
 }
 
@@ -821,6 +859,12 @@ h2 {
 .quickStartItem span {
   color: #6d7887;
   font-size: 11px;
+}
+
+.quickStartItem span.quickStartModel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .runHead > .pill,

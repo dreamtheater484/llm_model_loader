@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 
-QUANT_RE = re.compile(r"(?:^|[-_:])((?:UD-)?(?:IQ|Q|F)\d(?:_[A-Z0-9]+)+|F16|BF16|Q8_0|Q4_K_M|Q5_K_M)(?:$|[-_.:])", re.I)
+QUANT_RE = re.compile(r"(?:^|[-_:])((?:UD-)?(?:IQ|Q|F)\d(?:_[A-Z0-9]+)+|F16|BF16|Q8_0|Q4_K_M|Q5_K_M|NVFP4|MXFP4)(?:$|[-_.:])", re.I)
 
 
 def _strip_shell_quotes(value: str) -> str:
@@ -35,6 +35,10 @@ class ScriptInfo:
     cache_type_k: str | None = None
     cache_type_v: str | None = None
     parallel: int | None = None
+    runtime: str = "llama.cpp"
+    wsl_distro: str | None = None
+    wsl_launcher: str | None = None
+    concurrency: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -52,7 +56,24 @@ def _powershell_to_argv(raw: str) -> list[str]:
 
 def _is_executable_token(value: str) -> bool:
     normalized = value.strip().strip('"').lower()
-    return normalized.endswith("llama-server.exe") or normalized.endswith("llama-server")
+    return (
+        normalized.endswith("llama-server.exe")
+        or normalized.endswith("llama-server")
+        or normalized.endswith("wsl.exe")
+        or normalized == "wsl"
+        or normalized.endswith("ninfer-serve")
+        or normalized.endswith("ninfer-serve.exe")
+    )
+
+
+def _is_ninfer_executable(value: str) -> bool:
+    normalized = value.strip('"').lower()
+    return (
+        normalized.endswith("wsl.exe")
+        or normalized == "wsl"
+        or normalized.endswith("ninfer-serve")
+        or normalized.endswith("ninfer-serve.exe")
+    )
 
 
 def _value_after(args: list[str], *names: str) -> str | None:
@@ -64,6 +85,31 @@ def _value_after(args: list[str], *names: str) -> str | None:
             if arg.startswith(prefix):
                 return arg[len(prefix) :].strip('"')
     return None
+
+
+def _bash_lc_payload(raw_script: str) -> str | None:
+    # The ninfer payload is a single-quoted bash -lc argument in the raw
+    # PowerShell line. shlex.split(posix=False) fragments it on spaces, so
+    # extract it straight from the source instead. Accept the unterminated
+    # form too (older generated scripts relied on the trailing quote being
+    # implied by the end of the line).
+    match = re.search(r"-lc\s+['\"](.*?)(['\"]\s*)?$", raw_script, re.DOTALL)
+    return match.group(1) if match else None
+
+
+NINFER_LAUNCHER_RE = re.compile(r"(\S*run-qwen38-nvfp4\.sh)")
+
+
+def _ninfer_env(payload: str | None, name: str) -> str | None:
+    if not payload:
+        return None
+    match = re.search(rf"\b{re.escape(name)}=(\S+)", payload)
+    return match.group(1) if match else None
+
+
+def _ninfer_int(payload: str | None, name: str) -> int | None:
+    value = _ninfer_env(payload, name)
+    return int(value) if value and value.isdigit() else None
 
 
 def detect_quantization(*values: str | None) -> str | None:
@@ -87,9 +133,16 @@ def parse_script(raw_script: str) -> ScriptInfo:
     if argv and _is_executable_token(argv[0]):
         executable = argv[0].strip('"')
         args = argv[1:]
+    is_ninfer = bool(executable and _is_ninfer_executable(executable))
+    payload = _bash_lc_payload(raw_script) if is_ninfer else None
+    if payload is not None:
+        # Rebuild args so -lc carries the whole payload as one token (shlex
+        # posix=False would have fragmented it on spaces).
+        lc_index = next((i for i, a in enumerate(args) if a == "-lc"), None)
+        if lc_index is not None:
+            args = args[:lc_index] + ["-lc", payload]
     host = _value_after(args, "--host") or "127.0.0.1"
     port = int(_value_after(args, "--port") or 8080)
-    ctx = _value_after(args, "-c", "--ctx-size")
     model_ref = _value_after(args, "-m", "--model", "-hf", "-hfr", "--hf-repo")
     alias = _value_after(args, "--alias")
     n_cpu_moe = _value_after(args, "--n-cpu-moe")
@@ -98,10 +151,37 @@ def parse_script(raw_script: str) -> ScriptInfo:
     cache_type_k = _value_after(args, "-ctk", "--cache-type-k")
     cache_type_v = _value_after(args, "-ctv", "--cache-type-v")
     parallel = _value_after(args, "-np", "--parallel")
-    quant = detect_quantization(model_ref, alias, raw_script)
+    wsl_distro = wsl_launcher = None
+    concurrency = None
+    if is_ninfer:
+        wsl_distro = _value_after(args, "-d", "--distribution")
+        launcher_match = NINFER_LAUNCHER_RE.search(payload or "")
+        wsl_launcher = launcher_match.group(1) if launcher_match else None
+        host = _ninfer_env(payload, "NINFER_HOST") or host
+        port = _ninfer_int(payload, "NINFER_PORT") or (8081 if is_ninfer else port)
+        concurrency = _ninfer_int(payload, "NINFER_CONCURRENCY")
+        max_context = _ninfer_int(payload, "NINFER_MAX_CONTEXT")
+        min_context = _ninfer_int(payload, "NINFER_MIN_CONTEXT")
+        model_id_match = re.search(r"--model-id\s+(\S+)", payload or "")
+        model_ref = model_id_match.group(1) if model_id_match else None
+    ctx = _value_after(args, "-c", "--ctx-size")
+    if is_ninfer:
+        # The ladder starts at NINFER_MAX_CONTEXT, but NINFER_MIN_CONTEXT is the
+        # guaranteed floor the server will accept, so prefer it for display/estimates.
+        if max_context and min_context:
+            ctx = str(min_context)
+        elif max_context:
+            ctx = str(max_context)
+        elif min_context:
+            ctx = str(min_context)
+        else:
+            ctx = None
+    quant = detect_quantization(model_ref, alias, _ninfer_env(payload, "NINFER_MODEL_FILE"), raw_script)
     flash_value = (_value_after(args, "-fa", "--flash-attn") or "").lower()
     flash = flash_value in {"on", "true", "1", "yes"}
-    mtp = "draft-mtp" in raw_script.lower() or "--spec-type" in args
+    # NInfer's pinned preset hardcodes the MTP3 spec in the launcher, so any
+    # ninfer script implies speculative decoding is active.
+    mtp = is_ninfer or "draft-mtp" in raw_script.lower() or "--spec-type" in args or (payload is not None and "--spec mtp" in payload)
     return ScriptInfo(
         executable=executable,
         args=args,
@@ -119,6 +199,10 @@ def parse_script(raw_script: str) -> ScriptInfo:
         cache_type_k=cache_type_k,
         cache_type_v=cache_type_v,
         parallel=int(parallel) if parallel and parallel.isdigit() else None,
+        runtime="ninfer" if is_ninfer else "llama.cpp",
+        wsl_distro=wsl_distro,
+        wsl_launcher=wsl_launcher,
+        concurrency=concurrency,
     )
 
 

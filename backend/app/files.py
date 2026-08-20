@@ -36,6 +36,7 @@ def browse_files(path: str | None = None, gguf_only: bool = True, executable_onl
     if not current.exists() or not current.is_dir():
         current = user_home()
     current = current.resolve()
+    model_suffixes = {".gguf", ".ninfer"}
     entries: list[dict[str, Any]] = []
     error: str | None = None
     try:
@@ -45,7 +46,7 @@ def browse_files(path: str | None = None, gguf_only: bool = True, executable_onl
                 is_dir = child.is_dir()
                 if not is_dir and executable_only and child.name.lower() not in {"llama-server.exe", "llama-server"}:
                     continue
-                if not is_dir and gguf_only and not executable_only and child.suffix.lower() != ".gguf":
+                if not is_dir and gguf_only and not executable_only and child.suffix.lower() not in model_suffixes:
                     continue
                 item: dict[str, Any] = {
                     "name": child.name,
@@ -54,7 +55,7 @@ def browse_files(path: str | None = None, gguf_only: bool = True, executable_onl
                     "size_bytes": None if is_dir else child.stat().st_size,
                     "modified_at": child.stat().st_mtime,
                 }
-                if not is_dir and child.suffix.lower() == ".gguf":
+                if not is_dir and child.suffix.lower() in model_suffixes:
                     item.update(inspect_model_file(str(child)))
                 entries.append(item)
             except OSError:

@@ -491,7 +491,7 @@ function ImportModel({ reload, toast, settings }) {
 
   async function importSelected(selectedPath) {
     if (!selectedPath) {
-      setImportMessage("Select a GGUF file first.");
+      setImportMessage("Select a model file first.");
       return;
     }
     if (!path) {
@@ -542,24 +542,29 @@ function ImportModel({ reload, toast, settings }) {
         </div>
         {browser?.error && <div className="inlineError">{browser.error}</div>}
         <div className="fileBrowser">
-          {!browser?.entries?.length && <div className="empty">No GGUF files in this folder.</div>}
+          {!browser?.entries?.length && <div className="empty">No GGUF or NInfer files in this folder.</div>}
           {browser?.entries?.map((entry) => (
             <button
-              className={`fileEntry ${entry.path === path ? "selected" : ""}`}
+              className={`fileEntry ${entry.path === path ? "selected" : ""} ${entry.format === "ninfer" ? "ninfer" : ""}`}
               key={entry.path}
               onClick={() => entry.type === "directory" ? loadBrowser(entry.path) : (setPath(entry.path), setImportMessage(""))}
               onDoubleClick={() => entry.type === "directory" ? loadBrowser(entry.path) : importSelected(entry.path)}
             >
               {entry.type === "directory" ? <Folder size={15} /> : <FileArchive size={15} />}
               <span>{entry.name}</span>
-              {entry.type === "file" && <small>{entry.quantization || "GGUF"} / {formatBytes(entry.size_bytes)}</small>}
+              {entry.type === "file" && (
+                <span className="fileMeta">
+                  <small>{entry.format === "ninfer" ? formatBytes(entry.size_bytes) : `${entry.quantization || "GGUF"} / ${formatBytes(entry.size_bytes)}`}</small>
+                  {entry.format === "ninfer" && <Pill tone="ninfer">NInfer</Pill>}
+                </span>
+              )}
             </button>
           ))}
         </div>
       </div>
       <div className={`selectedFile ${path ? "ready" : ""}`}>
         <FileArchive size={14} />
-        <span>{path || "No GGUF file selected. Open folders above, then select a .gguf row."}</span>
+        <span>{path || "No model file selected. Open folders above, then select a .gguf or .ninfer row."}</span>
       </div>
       {importMessage && <div className={`importMessage ${importMessage.includes("imported") ? "ok" : ""}`}>{importMessage}</div>}
       <div className="toolbar wrap">
@@ -698,7 +703,7 @@ function SortableModelBlock({ model, draggingDisabled, children }) {
     transition
   };
   return (
-    <div ref={setNodeRef} style={style} className={`modelBlock ${isDragging ? "dragging" : ""}`}>
+    <div ref={setNodeRef} style={style} className={`modelBlock ${isDragging ? "dragging" : ""} ${model.source === "ninfer" ? "ninfer" : ""}`}>
       {children({ attributes, listeners, draggingDisabled })}
     </div>
   );
@@ -709,7 +714,7 @@ function ModelDragPreview({ model }) {
   return (
     <div className="modelDragPreview">
       <strong>{model.name}</strong>
-      <span>{model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)}</span>
+      <span>{model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)}{model.source === "ninfer" ? " / NInfer" : ""}</span>
     </div>
   );
 }
@@ -829,7 +834,10 @@ function Library({ models, reload, toast }) {
                 <Star size={15} fill="currentColor" aria-hidden="true" />
                 <div>
                   <strong>{script.name}</strong>
-                  <span>{model.name}</span>
+                  <span className="quickStartModel">
+                    {model.name}
+                    {model.source === "ninfer" && <Pill tone="ninfer">NInfer</Pill>}
+                  </span>
                 </div>
                 <button className="primary" onClick={() => start(script.id)}>
                   <Play size={14} /> Start
@@ -874,7 +882,10 @@ function Library({ models, reload, toast }) {
                         <GripVertical size={15} />
                       </button>
                       <div>
-                        <strong>{model.name}</strong>
+                        <span className="modelTitleLine">
+                          <strong>{model.name}</strong>
+                          {model.source === "ninfer" && <Pill tone="ninfer">NInfer</Pill>}
+                        </span>
                         <span>
                           {model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)}
                           {model.shard_count > 1 ? ` / ${model.shard_count} parts` : ""} / {model.path}
@@ -927,11 +938,11 @@ function Runs({ runs, models, reload, toast }) {
   function statusMessage(run) {
     if (run.status_message) return run.status_message;
     if (run.status === "failed" && run.error) return run.error;
-    if (run.status === "aborted") return "Aborted: llama.cpp process was stopped.";
-    if (run.status === "unloaded") return "Unloaded: llama.cpp process was stopped.";
-    if (run.status === "loaded") return "Loaded: llama.cpp server is running.";
-    if (run.status === "loading") return "Loading: waiting for llama.cpp startup output and health check.";
-    return "Waiting for llama.cpp status...";
+    if (run.status === "aborted") return "Aborted: server process was stopped.";
+    if (run.status === "unloaded") return "Unloaded: server process was stopped.";
+    if (run.status === "loaded") return "Loaded: server is running.";
+    if (run.status === "loading") return "Loading: waiting for startup output and health check.";
+    return "Waiting for server status...";
   }
   async function action(run, kind) {
     try {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import threading
@@ -14,6 +15,9 @@ from .gpu import query_gpus
 from .llamacpp import resolve_llama_server_path
 from .scripts import can_fit_vram, estimate_vram_mib, is_fit_managed, parse_script
 from .storage import decode_json_field, new_id, now, store
+
+
+NINFER_LAN_TASK = "LLM-Model-Loader-NInfer-LAN"
 
 
 def _with_loader_defaults(args: list[str]) -> list[str]:
@@ -29,6 +33,21 @@ def _with_loader_defaults(args: list[str]) -> list[str]:
     ui_config_flags = {"--ui-config", "--webui-config", "--ui-config-file", "--webui-config-file"}
     if not any(flag in result for flag in ui_config_flags):
         result = [*result, "--ui-config", '{"showMessageStats":true}']
+    return result
+
+
+def _with_ninfer_defaults(args: list[str]) -> list[str]:
+    # Mirrors _with_loader_defaults for WSL-backed NInfer scripts: expose the
+    # server on the LAN by binding all interfaces inside WSL, unless the script
+    # pins NINFER_HOST itself. The stored/probed host stays 127.0.0.1 because
+    # 0.0.0.0 is not a valid connect target from the loader.
+    result = list(args)
+    for index, arg in enumerate(result):
+        if arg == "-lc" and index + 1 < len(result):
+            payload = result[index + 1]
+            if "NINFER_HOST=" not in payload:
+                result[index + 1] = f"NINFER_HOST=0.0.0.0 {payload}"
+            return result
     return result
 
 
@@ -84,7 +103,7 @@ class RunManager:
             if pid and self._pid_running(int(pid)) and not tracked:
                 message = (
                     "Process is still running, but this backend session is no longer attached to its output. "
-                    "Abort it and start again to capture live llama.cpp logs."
+                    "Abort it and start again to capture live server logs."
                 )
                 store.execute(
                     "update runs set status='orphaned', status_message=?, last_heartbeat_at=? where id=?",
@@ -111,7 +130,7 @@ class RunManager:
         parsed = plan["parsed"]
         args = plan["args"]
         run_id = new_id("run")
-        message = "Launching llama.cpp server."
+        message = "Launching server."
         store.execute(
             """
             insert into runs(id, script_id, model_id, status, status_message, host, port, started_at, last_heartbeat_at)
@@ -132,10 +151,14 @@ class RunManager:
         with self._lock:
             self._processes[run_id] = process
         store.execute("update runs set pid=? where id=?", (process.pid, run_id))
-        self._append_log(run_id, f"[loader] Starting llama-server PID {process.pid}.")
+        self._append_log(run_id, f"[loader] Starting server process PID {process.pid}.")
         self._append_log(run_id, f"[loader] Executable: {plan['llama_server']}")
         self._append_log(run_id, f"[loader] Health check: http://{self._probe_host(parsed.get('host'))}:{parsed.get('port') or 8080}/health")
-        threading.Thread(target=self._watch, args=(run_id, process), daemon=True).start()
+        lan_forward = parsed.get("runtime") == "ninfer" and any(
+            "-lc" == arg and "NINFER_HOST=0.0.0.0" in (args[index + 1] if index + 1 < len(args) else "")
+            for index, arg in enumerate(args)
+        )
+        threading.Thread(target=self._watch, args=(run_id, process, lan_forward), daemon=True).start()
         return store.row("select * from runs where id=?", (run_id,)) or {"id": run_id}
 
     def _launch_plan(self, script_id: str, manual_vram_mib: int | None = None) -> dict[str, Any]:
@@ -150,30 +173,45 @@ class RunManager:
         free_mib = gpus[0]["memory_free_mib"] if gpus else 0
         parsed = parse_script(script["raw_script"]).to_dict()
         manual = manual_vram_mib or model.get("manual_vram_mib")
+        is_ninfer = parsed.get("runtime") == "ninfer"
         is_moe_cpu = bool(parsed.get("n_cpu_moe"))
         fit_managed = is_fit_managed(parsed)
         estimate = None
-        if not fit_managed and not (is_moe_cpu and not manual):
+        if is_ninfer:
+            ok, reason = True, "VRAM gate skipped: NInfer auto-sizes its shared KV pool after weights, vision, MTP, workspace, and CUDA Graph allocation."
+        elif fit_managed:
+            ok, reason = True, "VRAM gate delegated to llama.cpp --fit; model layers will be adjusted automatically."
+        elif not is_moe_cpu or manual:
             estimate = script.get("estimated_vram_mib") or estimate_vram_mib(
                 model.get("size_bytes"),
                 parsed.get("ctx_size"),
                 n_cpu_moe=parsed.get("n_cpu_moe"),
             )
-        allow_unknown = bool((is_moe_cpu and not manual) or fit_managed)
-        if fit_managed:
-            ok, reason = True, "VRAM gate delegated to llama.cpp --fit; model layers will be adjusted automatically."
-        else:
+            allow_unknown = False
             ok, reason = can_fit_vram(free_mib, estimate, manual, allow_unknown=allow_unknown)
+        else:
+            ok, reason = True, "VRAM gate skipped because this script keeps MoE experts on CPU/RAM."
         if not ok:
             raise ValueError(reason)
-        script_executable = parsed.get("executable") or (script.get("parsed_json") or {}).get("executable")
-        llama_server = resolve_llama_server_path(script_executable or store.setting("llama_server_path") or "")
-        if not llama_server:
-            raise ValueError("Configure llama-server.exe before starting a script.")
-        if not os.path.exists(llama_server):
-            raise ValueError(f"llama-server.exe was not found: {llama_server}")
-        parsed_args = _with_loader_defaults(parsed["args"])
-        args = [llama_server] + parsed_args
+        if is_ninfer:
+            llama_server = shutil.which("wsl.exe") or shutil.which("wsl")
+            if not llama_server:
+                raise ValueError("wsl.exe was not found. NInfer runs inside WSL2; enable WSL first.")
+            if not parsed.get("wsl_distro"):
+                raise ValueError("NInfer scripts must name the WSL distro with -d.")
+            if not parsed.get("wsl_launcher"):
+                raise ValueError("NInfer scripts must reference the run-qwen38-nvfp4.sh launcher.")
+            parsed_args = _with_ninfer_defaults(parsed["args"])
+            args = [llama_server] + parsed_args
+        else:
+            script_executable = parsed.get("executable") or (script.get("parsed_json") or {}).get("executable")
+            llama_server = resolve_llama_server_path(script_executable or store.setting("llama_server_path") or "")
+            if not llama_server:
+                raise ValueError("Configure llama-server.exe before starting a script.")
+            if not os.path.exists(llama_server):
+                raise ValueError(f"llama-server.exe was not found: {llama_server}")
+            parsed_args = _with_loader_defaults(parsed["args"])
+            args = [llama_server] + parsed_args
         return {
             "script": script,
             "model": model,
@@ -187,17 +225,47 @@ class RunManager:
             "vram_reason": reason,
         }
 
+    def _ninfer_stop_args(self, run_id: str) -> list[str] | None:
+        row = store.row("select script_id from runs where id=?", (run_id,))
+        if not row:
+            return None
+        script = store.row("select raw_script from scripts where id=?", (row["script_id"],))
+        if not script:
+            return None
+        info = parse_script(script["raw_script"])
+        if info.runtime != "ninfer" or not info.wsl_distro or not info.wsl_launcher:
+            return None
+        wsl = shutil.which("wsl.exe") or shutil.which("wsl")
+        if not wsl:
+            return None
+        return [wsl, "-d", info.wsl_distro, "--", "bash", "-lc", f"{info.wsl_launcher} stop"]
+
     def stop(self, run_id: str, status: str = "unloaded") -> dict[str, Any]:
         with self._lock:
             process = self._processes.get(run_id)
         row = store.row("select * from runs where id=?", (run_id,))
+        is_ninfer = self._ninfer_stop_args(run_id) is not None
         if process and process.poll() is None:
+            stop_args = self._ninfer_stop_args(run_id)
+            if stop_args:
+                self._append_log(run_id, "[loader] Signaling the NInfer server inside WSL to stop.")
+                try:
+                    subprocess.run(stop_args, capture_output=True, timeout=20)
+                except Exception:
+                    pass
             self._kill_process(process)
         elif row and row.get("pid"):
             self._kill_pid(int(row["pid"]))
         message = "Load aborted." if status == "aborted" else "Model unloaded."
         store.execute("update runs set status=?, ended_at=?, status_message=? where id=?", (status, now(), message, run_id))
         self._append_log(run_id, f"[loader] {message}")
+        if is_ninfer:
+            # Release the WSL2 NAT portproxy for this port so other servers
+            # (e.g. llama.cpp) can bind it again. The LAN helper task runs
+            # elevated as SYSTEM and only forwards while NInfer is healthy, so
+            # now that the server is stopped it removes the stale entry.
+            self._append_log(run_id, "[loader] Releasing the LAN forwarder for this port.")
+            self._sync_lan_forward()
         return store.row("select * from runs where id=?", (run_id,)) or {"id": run_id}
 
     def delete(self, run_id: str) -> dict[str, bool]:
@@ -237,24 +305,26 @@ class RunManager:
             event_hub.publish_threadsafe("run", {"history_deleted": inactive_ids})
         return {"deleted": len(inactive_ids), "kept_active": int((kept_row or {}).get("n") or 0)}
 
-    def _watch(self, run_id: str, process: subprocess.Popen[str]) -> None:
+    def _watch(self, run_id: str, process: subprocess.Popen[str], lan_forward: bool = False) -> None:
         start = time.time()
         loaded = False
         row = store.row("select host, port from runs where id=?", (run_id,))
         host, port = (row or {}).get("host") or "127.0.0.1", (row or {}).get("port") or 8080
         threading.Thread(target=self._read_output, args=(run_id, process), daemon=True).start()
-        self._set_status(run_id, "loading", f"Loading: waiting for llama.cpp health on {host}:{port}.")
+        self._set_status(run_id, "loading", f"Loading: waiting for server health on {host}:{port}.")
         last_heartbeat = 0.0
         while process.poll() is None:
             if not loaded and self._health(host, int(port)):
                 loaded = True
                 load_seconds = time.time() - start
-                message = f"Loaded: llama.cpp is healthy after {self._format_seconds(load_seconds)}."
+                message = f"Loaded: server is healthy after {self._format_seconds(load_seconds)}."
                 store.execute(
                     "update runs set status='loaded', status_message=?, load_seconds=?, last_heartbeat_at=? where id=?",
                     (message, load_seconds, now(), run_id),
                 )
                 self._append_log(run_id, f"[loader] {message}")
+                if lan_forward:
+                    self._sync_lan_forward()
                 event_hub.publish_threadsafe("run", store.row("select * from runs where id=?", (run_id,)) or {})
             current = time.time()
             if current - last_heartbeat >= 5:
@@ -277,11 +347,11 @@ class RunManager:
         if code == 0 and loaded:
             final_status = "unloaded"
         if final_status == "unloaded":
-            message = "Unloaded: llama.cpp process exited cleanly."
+            message = "Unloaded: server process exited cleanly."
         elif final_status == "exited":
             message = f"Exited: loaded server stopped with code {code}."
         else:
-            message = f"Failed: llama.cpp exited with code {code} before becoming healthy."
+            message = f"Failed: server exited with code {code} before becoming healthy."
         self._append_log(run_id, f"[loader] {message}")
         current = store.row("select status from runs where id=?", (run_id,))
         if current and current.get("status") in {"aborted", "unloaded"}:
@@ -369,6 +439,17 @@ class RunManager:
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
         else:
             os.kill(pid, signal.SIGTERM)
+
+    @staticmethod
+    def _sync_lan_forward() -> None:
+        # Best-effort re-sync of the WSL2 NAT portproxy + firewall rule. The
+        # helper scheduled task runs elevated on demand; when it was never set
+        # up (fresh machine, -SkipLanSetup), this is a silent no-op and the
+        # server stays reachable on this host only.
+        try:
+            subprocess.run(["schtasks", "/run", "/tn", NINFER_LAN_TASK], capture_output=True, timeout=15)
+        except Exception:
+            pass
 
     @staticmethod
     def _pid_running(pid: int) -> bool:
