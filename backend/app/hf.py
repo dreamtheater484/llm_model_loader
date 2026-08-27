@@ -20,10 +20,14 @@ def _repo_url(repo_id: str, suffix: str = "") -> str:
 
 
 def search_models(query: str, limit: int = 20) -> list[dict[str, Any]]:
+    requested_limit = min(max(limit, 1), 50)
     params = urllib.parse.urlencode(
         {
             "search": query,
-            "limit": min(max(limit, 1), 50),
+            # Filtering happens locally because Hugging Face's GGUF tag is not
+            # consistently present. Over-fetch so non-GGUF matches do not use
+            # up the caller's result limit before that filter is applied.
+            "limit": min(max(requested_limit * 3, requested_limit), 50),
             "sort": "downloads",
             "direction": "-1",
         }
@@ -32,8 +36,8 @@ def search_models(query: str, limit: int = 20) -> list[dict[str, Any]]:
     results = []
     for item in data:
         tags = item.get("tags") or []
-        if query and "gguf" not in " ".join(tags).lower() and "gguf" not in item.get("modelId", "").lower():
-            pass
+        if "gguf" not in " ".join(tags).lower() and "gguf" not in item.get("modelId", "").lower():
+            continue
         results.append(
             {
                 "repo_id": item.get("modelId"),
@@ -45,7 +49,8 @@ def search_models(query: str, limit: int = 20) -> list[dict[str, Any]]:
                 "gated": item.get("gated", False),
             }
         )
-    return results
+    results.sort(key=lambda item: (item["downloads"], item["likes"]), reverse=True)
+    return results[:requested_limit]
 
 
 def model_files(repo_id: str) -> list[dict[str, Any]]:

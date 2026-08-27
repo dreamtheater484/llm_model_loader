@@ -2,7 +2,8 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $LlamaBuild = "b10107"
-$LlamaDir = Join-Path $env:USERPROFILE "AI\llama.cpp"
+$AiRoot = "D:\Documents\AI"
+$LlamaDir = Join-Path $AiRoot "llama.cpp"
 $LlamaServer = Join-Path $LlamaDir "llama-server.exe"
 $Assets = @(
     @{

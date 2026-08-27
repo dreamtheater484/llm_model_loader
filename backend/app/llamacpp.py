@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .config import user_home
+from .config import ai_root
 
 
 def _candidate_score(path: Path) -> tuple[int, str]:
@@ -25,7 +25,7 @@ def discover_llama_server() -> dict[str, Any]:
     command = shutil.which("llama-server.exe") or shutil.which("llama-server")
     if command:
         candidates.append(Path(command))
-    for root in [user_home() / "AI", Path.cwd()]:
+    for root in [ai_root(), Path.cwd()]:
         if not root.exists():
             continue
         try:

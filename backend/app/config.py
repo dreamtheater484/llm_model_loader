@@ -7,10 +7,15 @@ from pathlib import Path
 APP_NAME = "llm-model-loader"
 DEFAULT_HOST = os.environ.get("LLM_MODEL_LOADER_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("LLM_MODEL_LOADER_PORT", "8174"))
+AI_ROOT = Path(r"D:\Documents\AI")
 
 
 def user_home() -> Path:
     return Path(os.environ.get("USERPROFILE") or Path.home())
+
+
+def ai_root() -> Path:
+    return AI_ROOT
 
 
 def app_data_dir() -> Path:
@@ -34,7 +39,7 @@ def app_data_dir() -> Path:
 
 
 def default_model_dir() -> Path:
-    return user_home() / "AI" / "models"
+    return ai_root() / "models"
 
 
 DB_PATH = app_data_dir() / "loader.sqlite3"

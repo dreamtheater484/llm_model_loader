@@ -22,7 +22,7 @@ To install the CUDA-enabled PrismML runtime, download the official Ternary-Bonsa
 setup_bonsai_27b.cmd
 ```
 
-This keeps the stock llama.cpp runtime installed by `setup.cmd` and places the Bonsai-specific runtime under `%USERPROFILE%\AI\runtimes`. On an 8 GB RTX 4070 Laptop GPU, the generated baseline preset uses an 8k Q4 KV cache so all 65 model layers and the complete KV cache remain on CUDA. Its reduced compute batch is the only additional memory accommodation; vision, speculative decoding, CPU offload, and thread tuning remain disabled. This provides a controlled all-VRAM baseline before changing one performance variable at a time.
+This keeps the stock llama.cpp runtime installed by `setup.cmd` and places the Bonsai-specific runtime under `D:\Documents\AI\runtimes`. On an 8 GB RTX 4070 Laptop GPU, the generated baseline preset uses an 8k Q4 KV cache so all 65 model layers and the complete KV cache remain on CUDA. Its reduced compute batch is the only additional memory accommodation; vision, speculative decoding, CPU offload, and thread tuning remain disabled. This provides a controlled all-VRAM baseline before changing one performance variable at a time.
 
 ## NInfer + Qwen3.8-27B NVFP4 (WSL2)
 
@@ -66,6 +66,6 @@ cd frontend
 npm run dev
 ```
 
-Settings and metadata are stored in `%LOCALAPPDATA%\llm-model-loader\loader.sqlite3`. Managed models default to `%USERPROFILE%\AI\models`, and `llama.cpp` is installed in `%USERPROFILE%\AI\llama.cpp`.
+Settings and metadata are stored in `%LOCALAPPDATA%\llm-model-loader\loader.sqlite3`. Managed models default to `D:\Documents\AI\models`, and `llama.cpp` is installed in `D:\Documents\AI\llama.cpp`.
 
 

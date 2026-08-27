@@ -1,7 +1,47 @@
 import unittest
 from unittest.mock import patch
 
-from backend.app.hf import model_files
+from backend.app.hf import model_files, search_models
+
+
+class HuggingFaceSearchTests(unittest.TestCase):
+    def test_search_only_returns_gguf_repositories(self):
+        payload = [
+            {
+                "modelId": "unsloth/GLM-5.3-Flash",
+                "author": "unsloth",
+                "tags": ["transformers", "safetensors", "glm5_next"],
+            },
+            {
+                "modelId": "unsloth/GLM-5.3-Flash-GGUF",
+                "author": "unsloth",
+                "tags": ["transformers", "text-generation"],
+            },
+            {
+                "modelId": "community/GLM-5.3-Flash",
+                "author": "community",
+                "tags": ["gguf", "quantized"],
+            },
+        ]
+
+        with patch("backend.app.hf._get_json", return_value=payload):
+            results = search_models("GLM-5.3-Flash")
+
+        self.assertEqual(
+            [result["repo_id"] for result in results],
+            ["unsloth/GLM-5.3-Flash-GGUF", "community/GLM-5.3-Flash"],
+        )
+
+    def test_non_gguf_matches_do_not_consume_result_limit(self):
+        payload = [
+            {"modelId": "author/base-model", "tags": ["safetensors"]},
+            {"modelId": "author/quantized-GGUF", "tags": []},
+        ]
+
+        with patch("backend.app.hf._get_json", return_value=payload):
+            results = search_models("model", limit=1)
+
+        self.assertEqual([result["repo_id"] for result in results], ["author/quantized-GGUF"])
 
 
 class HuggingFaceFileTests(unittest.TestCase):

@@ -151,6 +151,7 @@ def parse_script(raw_script: str) -> ScriptInfo:
     cache_type_k = _value_after(args, "-ctk", "--cache-type-k")
     cache_type_v = _value_after(args, "-ctv", "--cache-type-v")
     parallel = _value_after(args, "-np", "--parallel")
+    spec_type = (_value_after(args, "--spec-type") or "").lower()
     wsl_distro = wsl_launcher = None
     concurrency = None
     if is_ninfer:
@@ -181,7 +182,7 @@ def parse_script(raw_script: str) -> ScriptInfo:
     flash = flash_value in {"on", "true", "1", "yes"}
     # NInfer's pinned preset hardcodes the MTP3 spec in the launcher, so any
     # ninfer script implies speculative decoding is active.
-    mtp = is_ninfer or "draft-mtp" in raw_script.lower() or "--spec-type" in args or (payload is not None and "--spec mtp" in payload)
+    mtp = is_ninfer or "draft-mtp" in spec_type or (payload is not None and "--spec mtp" in payload)
     return ScriptInfo(
         executable=executable,
         args=args,

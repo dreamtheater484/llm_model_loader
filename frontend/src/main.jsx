@@ -251,7 +251,7 @@ function Settings({ settings, setSettings, toast }) {
         <div className="browserShell runtimeBrowser">
           <div className="browserChrome">
             <button onClick={() => loadBrowser(browser?.parent)} disabled={!browser?.parent}><ChevronUp size={14} /> Up</button>
-            <button onClick={() => loadBrowser("C:\\Users\\Roy\\AI")}><Home size={14} /> AI</button>
+            <button onClick={() => loadBrowser("D:\\Documents\\AI")}><Home size={14} /> AI</button>
             <input value={browser?.path || ""} onChange={(event) => setBrowser({ ...(browser || {}), path: event.target.value })} onKeyDown={(event) => event.key === "Enter" && loadBrowser(event.currentTarget.value)} />
             <button onClick={() => loadBrowser(browser?.path)}><FolderOpen size={14} /> Open</button>
           </div>

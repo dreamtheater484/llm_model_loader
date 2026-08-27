@@ -28,6 +28,10 @@ class ScriptTests(unittest.TestCase):
         self.assertTrue(info.flash_attention)
         self.assertTrue(info.mtp)
 
+    def test_parse_script_does_not_mislabel_dspark_as_mtp(self):
+        info = parse_script("--spec-type draft-dspark")
+        self.assertFalse(info.mtp)
+
     def test_parse_script_extracts_moe_cpu_experts(self):
         raw = '-m "C:\\models\\Qwen3.6-35B-A3B-Q4_K_M.gguf" --ctx-size 65536 --n-cpu-moe 34'
         info = parse_script(raw)
@@ -39,9 +43,9 @@ class ScriptTests(unittest.TestCase):
         self.assertEqual(info.args, ["--chat-template-kwargs", '{"preserve_thinking":false}'])
 
     def test_parse_script_strips_quoted_executable_from_args(self):
-        raw = '& "C:\\Users\\Roy\\AI\\llama.cpp\\llama-server.exe" `\n  -m "C:\\models\\model-Q4_K_M.gguf" `\n  --host 127.0.0.1'
+        raw = '& "D:\\Documents\\AI\\llama.cpp\\llama-server.exe" `\n  -m "C:\\models\\model-Q4_K_M.gguf" `\n  --host 127.0.0.1'
         info = parse_script(raw)
-        self.assertEqual(info.executable, "C:\\Users\\Roy\\AI\\llama.cpp\\llama-server.exe")
+        self.assertEqual(info.executable, "D:\\Documents\\AI\\llama.cpp\\llama-server.exe")
         self.assertEqual(info.args[0], "-m")
         self.assertNotIn("llama-server.exe", info.args[0])
 

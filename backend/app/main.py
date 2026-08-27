@@ -106,9 +106,15 @@ async def startup() -> None:
 
 @app.get("/api/settings")
 def get_settings() -> dict[str, str]:
-    llama_server_path = resolve_llama_server_path(store.setting("llama_server_path"))
-    if llama_server_path and validate_llama_server(llama_server_path):
-        store.set_setting("llama_server_path", llama_server_path)
+    configured = store.setting("llama_server_path")
+    llama_server_path = resolve_llama_server_path(configured)
+    if configured:
+        if llama_server_path and validate_llama_server(llama_server_path):
+            store.set_setting("llama_server_path", llama_server_path)
+        else:
+            # Keep a manually selected path visible while its files are being
+            # moved or installed. Do not replace it with an older discovery.
+            llama_server_path = configured
     else:
         discovered = discover_llama_server()
         llama_server_path = discovered["selected"]
@@ -125,10 +131,11 @@ def get_settings() -> dict[str, str]:
 @app.patch("/api/settings")
 def update_settings(body: SettingsIn) -> dict[str, str]:
     if body.llama_server_path is not None:
-        resolved = resolve_llama_server_path(body.llama_server_path)
-        if resolved and not validate_llama_server(resolved):
-            raise HTTPException(status_code=400, detail="Selected path is not a valid llama-server executable.")
-        store.set_setting("llama_server_path", resolved)
+        requested = body.llama_server_path.strip()
+        resolved = resolve_llama_server_path(requested)
+        if resolved and validate_llama_server(resolved):
+            requested = resolved
+        store.set_setting("llama_server_path", requested)
     if body.model_dir is not None:
         Path(body.model_dir).mkdir(parents=True, exist_ok=True)
         store.set_setting("model_dir", body.model_dir)

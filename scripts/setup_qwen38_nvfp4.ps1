@@ -6,14 +6,14 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
-$AiRoot = Join-Path $env:USERPROFILE "AI"
+$AiRoot = "D:\Documents\AI"
 $SetupPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $SetupPython)) {
     $pythonCommand = Get-Command python.exe -ErrorAction SilentlyContinue
     if ($pythonCommand) { $SetupPython = $pythonCommand.Source }
 }
 if ([string]::IsNullOrWhiteSpace($ModelDir)) {
-    $ModelDir = Join-Path $env:USERPROFILE "AI\models"
+    $ModelDir = Join-Path $AiRoot "models"
     $dbPath = Join-Path $env:LOCALAPPDATA "llm-model-loader\loader.sqlite3"
     if ((Test-Path -LiteralPath $dbPath) -and (Test-Path -LiteralPath $SetupPython)) {
         try {

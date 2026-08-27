@@ -140,7 +140,7 @@ Follow the repo's `unittest` + temp-`Store` convention.
 ## Open questions
 
 1. **Keep the existing llama.cpp `setup_qwen38_nvfp4` flow?** Recommend yes — different runtime, same model family; they coexist cleanly in the DB.
-2. **NInfer install root:** keep `~/ninfer-qwen38` on the WSL ext4 (recommended — native I/O for the CMake build and model) vs. the repo's `%USERPROFILE%\AI\runtimes` convention via `/mnt/c` (consistent with Bonsai but 9p-slow and worse for CUDA builds). Recommend the former.
+2. **NInfer install root:** keep `~/ninfer-qwen38` on the WSL ext4 (recommended — native I/O for the CMake build and model) vs. the repo's `D:\Documents\AI\runtimes` convention via `/mnt/c` (consistent with Bonsai but 9p-slow and worse for CUDA builds). Recommend the former.
 3. **Auto-start after setup?** Recommend no (loader manages); `-Start` switch for direct use.
 4. **Verify the pinned revision + SHA.** The ChatGPT-script values (`MIN_RUNTIME_REV`, model SHA) are unverified in this repo — confirm against the live `neroued/ninfer` repo and the HF artifact before shipping.
 5. **VRAM gate bypass** for ninfer runtime (recommended) vs. a hard manual estimate.

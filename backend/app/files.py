@@ -5,7 +5,7 @@ import string
 from pathlib import Path
 from typing import Any
 
-from .config import user_home
+from .config import ai_root, user_home
 from .gguf import inspect_model_file
 from .storage import store
 
@@ -24,7 +24,7 @@ def browser_shortcuts() -> list[dict[str, str]]:
     candidates = [
         ("Home", home),
         ("Managed models", Path(store.setting("model_dir"))),
-        ("AI", home / "AI"),
+        ("AI", ai_root()),
         ("Downloads", home / "Downloads"),
         ("Documents", home / "Documents"),
     ]
