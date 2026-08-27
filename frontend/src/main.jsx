@@ -33,6 +33,7 @@ import {
   GripVertical,
   HardDrive,
   Home,
+  MemoryStick,
   Pencil,
   Play,
   Plus,
@@ -125,6 +126,13 @@ function IconButton({ icon: Icon, label, className = "", ...props }) {
 function TopTelemetry({ telemetry, refresh }) {
   const gpu = telemetry?.gpus?.[0];
   const used = gpu ? percent(gpu.memory_used_mib, gpu.memory_total_mib) : 0;
+  const memoryUsed = telemetry?.memory_used_bytes;
+  const memoryTotal = telemetry?.memory_total_bytes;
+  const memoryPercent = percent(memoryUsed, memoryTotal);
+  const memoryDetails = [
+    telemetry?.memory_type || "RAM",
+    telemetry?.memory_speed_mts ? `${telemetry.memory_speed_mts} MT/s` : null
+  ].filter(Boolean).join(" · ");
   return (
     <header className="topbar">
       <div className="brand">
@@ -141,6 +149,14 @@ function TopTelemetry({ telemetry, refresh }) {
             <label>{gpu?.name || "No NVIDIA GPU detected"}</label>
             <b>{gpu ? `${formatMib(gpu.memory_free_mib)} free / ${formatMib(gpu.memory_total_mib)}` : "Unavailable"}</b>
             <Progress value={used} />
+          </div>
+        </div>
+        <div className="metric wide">
+          <MemoryStick size={15} />
+          <div>
+            <label>{memoryDetails}</label>
+            <b>{memoryTotal == null ? "Unavailable" : `${formatBytes(memoryUsed)} used / ${formatBytes(memoryTotal)}`}</b>
+            <Progress value={memoryPercent} />
           </div>
         </div>
         <div className="metric">

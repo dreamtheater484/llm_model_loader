@@ -98,7 +98,7 @@ main {
 
 .metrics {
   display: grid;
-  grid-template-columns: minmax(260px, 2fr) repeat(4, minmax(110px, 1fr));
+  grid-template-columns: repeat(2, minmax(185px, 1.7fr)) repeat(4, minmax(75px, 1fr));
   gap: 8px;
 }
 
