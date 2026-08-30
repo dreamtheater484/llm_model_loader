@@ -100,7 +100,13 @@ class RunManager:
             pid = row.get("pid")
             with self._lock:
                 tracked = row["id"] in self._processes
-            if pid and self._pid_running(int(pid)) and not tracked:
+            if tracked:
+                # The watcher owns the lifecycle of processes launched by this
+                # backend. In particular, do not race a fresh launch before
+                # Windows has made its PID visible to tasklist.
+                continue
+            running = bool(pid and self._pid_running(int(pid)))
+            if running:
                 message = (
                     "Process is still running, but this backend session is no longer attached to its output. "
                     "Abort it and start again to capture live server logs."
@@ -110,7 +116,7 @@ class RunManager:
                     (message, now(), row["id"]),
                 )
                 self._append_log(row["id"], f"[loader] {message}")
-            elif not pid or not self._pid_running(int(pid)):
+            else:
                 store.execute(
                     """
                     update runs
@@ -131,13 +137,6 @@ class RunManager:
         args = plan["args"]
         run_id = new_id("run")
         message = "Launching server."
-        store.execute(
-            """
-            insert into runs(id, script_id, model_id, status, status_message, host, port, started_at, last_heartbeat_at)
-            values(?, ?, ?, 'loading', ?, ?, ?, ?, ?)
-            """,
-            (run_id, script_id, model["id"], message, parsed.get("host"), parsed.get("port"), now(), now()),
-        )
         process = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
@@ -150,7 +149,21 @@ class RunManager:
         )
         with self._lock:
             self._processes[run_id] = process
-        store.execute("update runs set pid=? where id=?", (process.pid, run_id))
+        try:
+            timestamp = now()
+            store.execute(
+                """
+                insert into runs(id, script_id, model_id, pid, status, status_message, host, port, started_at, last_heartbeat_at)
+                values(?, ?, ?, ?, 'loading', ?, ?, ?, ?, ?)
+                """,
+                (run_id, script_id, model["id"], process.pid, message, parsed.get("host"), parsed.get("port"), timestamp, timestamp),
+            )
+        except Exception:
+            with self._lock:
+                self._processes.pop(run_id, None)
+            if process.poll() is None:
+                self._kill_process(process)
+            raise
         self._append_log(run_id, f"[loader] Starting server process PID {process.pid}.")
         self._append_log(run_id, f"[loader] Executable: {plan['llama_server']}")
         self._append_log(run_id, f"[loader] Health check: http://{self._probe_host(parsed.get('host'))}:{parsed.get('port') or 8080}/health")
@@ -294,16 +307,24 @@ class RunManager:
             tuple(self.PROTECTED_STATUSES),
         )
         inactive_ids = [row["id"] for row in inactive_rows]
-        if inactive_ids:
-            with self._lock:
-                for run_id in inactive_ids:
+        live_ids: list[str] = []
+        deletable_ids: list[str] = []
+        with self._lock:
+            for run_id in inactive_ids:
+                process = self._processes.get(run_id)
+                if process and process.poll() is None:
+                    live_ids.append(run_id)
+                else:
+                    deletable_ids.append(run_id)
                     self._processes.pop(run_id, None)
+        if deletable_ids:
             store.execute(
-                f"delete from runs where id in ({','.join('?' for _ in inactive_ids)})",
-                tuple(inactive_ids),
+                f"delete from runs where id in ({','.join('?' for _ in deletable_ids)})",
+                tuple(deletable_ids),
             )
-            event_hub.publish_threadsafe("run", {"history_deleted": inactive_ids})
-        return {"deleted": len(inactive_ids), "kept_active": int((kept_row or {}).get("n") or 0)}
+            event_hub.publish_threadsafe("run", {"history_deleted": deletable_ids})
+        kept_active = int((kept_row or {}).get("n") or 0) + len(live_ids)
+        return {"deleted": len(deletable_ids), "kept_active": kept_active}
 
     def _watch(self, run_id: str, process: subprocess.Popen[str], lan_forward: bool = False) -> None:
         start = time.time()

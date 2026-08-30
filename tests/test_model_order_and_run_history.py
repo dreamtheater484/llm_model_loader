@@ -3,7 +3,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
 
@@ -123,6 +123,48 @@ class RunHistoryTests(unittest.TestCase):
         self.assertIn("left join models", seen[0])
         self.assertIn("left join scripts", seen[0])
 
+    def test_reconcile_leaves_tracked_launch_under_watcher_control(self):
+        manager = RunManager()
+        manager._processes = {"run_1": Mock()}
+
+        with patch("backend.app.runs.store.rows", return_value=[{"id": "run_1", "pid": None, "status": "loading"}]):
+            with patch.object(manager, "_pid_running") as pid_running:
+                with patch("backend.app.runs.store.execute") as execute:
+                    manager.reconcile_stale_runs()
+
+        pid_running.assert_not_called()
+        execute.assert_not_called()
+
+    def test_start_registers_process_before_persisting_visible_run(self):
+        manager = RunManager()
+        process = Mock(pid=5908)
+        plan = {
+            "script": {"id": "script_1"},
+            "model": {"id": "model_1"},
+            "parsed": {"host": "127.0.0.1", "port": 8080, "runtime": "llama.cpp"},
+            "args": ["llama-server.exe", "-m", "model.gguf"],
+            "llama_server": "llama-server.exe",
+        }
+        inserts = []
+
+        def record_insert(query, params=()):
+            if "insert into runs" in query:
+                self.assertIs(manager._processes.get("run_1"), process)
+                inserts.append(tuple(params))
+
+        with patch.object(manager, "_launch_plan", return_value=plan):
+            with patch("backend.app.runs.new_id", return_value="run_1"):
+                with patch("backend.app.runs.subprocess.Popen", return_value=process):
+                    with patch("backend.app.runs.store.execute", side_effect=record_insert):
+                        with patch("backend.app.runs.store.row", return_value={"id": "run_1", "pid": 5908}):
+                            with patch.object(manager, "_append_log"):
+                                with patch("backend.app.runs.threading.Thread"):
+                                    result = manager.start("script_1")
+
+        self.assertEqual(result["pid"], 5908)
+        self.assertEqual(len(inserts), 1)
+        self.assertEqual(inserts[0][3], 5908)
+
     def test_script_favorite_is_persisted(self):
         executed = []
         rows = [
@@ -139,7 +181,9 @@ class RunHistoryTests(unittest.TestCase):
 
     def test_delete_history_removes_only_inactive_runs(self):
         manager = RunManager()
-        manager._processes = {"failed_1": object(), "loaded_1": object()}
+        failed_process = Mock()
+        failed_process.poll.return_value = 1
+        manager._processes = {"failed_1": failed_process, "loaded_1": Mock()}
         executed = []
 
         with patch.object(manager, "reconcile_stale_runs"):
@@ -153,6 +197,27 @@ class RunHistoryTests(unittest.TestCase):
         self.assertNotIn("failed_1", manager._processes)
         self.assertIn("loaded_1", manager._processes)
         self.assertEqual(executed[0][1], ("failed_1", "unloaded_1"))
+
+    def test_delete_history_preserves_inactive_row_with_live_process(self):
+        manager = RunManager()
+        live_process = Mock()
+        live_process.poll.return_value = None
+        finished_process = Mock()
+        finished_process.poll.return_value = 1
+        manager._processes = {"failed_live": live_process, "failed_done": finished_process}
+        executed = []
+
+        with patch.object(manager, "reconcile_stale_runs"):
+            with patch("backend.app.runs.store.rows", return_value=[{"id": "failed_live"}, {"id": "failed_done"}]):
+                with patch("backend.app.runs.store.row", return_value={"n": 2}):
+                    with patch("backend.app.runs.store.execute", side_effect=lambda query, params=(): executed.append((query, tuple(params)))):
+                        with patch("backend.app.runs.event_hub.publish_threadsafe"):
+                            result = manager.delete_history()
+
+        self.assertEqual(result, {"deleted": 1, "kept_active": 3})
+        self.assertIn("failed_live", manager._processes)
+        self.assertNotIn("failed_done", manager._processes)
+        self.assertEqual(executed[0][1], ("failed_done",))
 
     def test_launch_plan_prefers_script_runtime_and_delegates_fit(self):
         manager = RunManager()
