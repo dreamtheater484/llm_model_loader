@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.request
 from functools import lru_cache
 from typing import Any
 
@@ -16,6 +17,7 @@ except Exception:  # pragma: no cover - optional dependency
 from .gpu import query_gpus
 
 _last_cpu_times: tuple[float, float] | None = None
+_runtime_speed_cache: dict[str, dict[str, float]] = {}
 
 _SMBIOS_MEMORY_TYPES = {
     20: "DDR",
@@ -113,7 +115,108 @@ def _memory_hardware() -> dict[str, Any]:
     }
 
 
-def telemetry(loaded_count: int = 0, loading_count: int = 0) -> dict[str, Any]:
+def _parse_prometheus_metrics(payload: str) -> dict[str, float]:
+    metrics: dict[str, float] = {}
+    for line in payload.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        try:
+            name, value = line.rsplit(None, 1)
+            if "{" not in name:
+                metrics[name] = float(value)
+        except (ValueError, TypeError):
+            continue
+    return metrics
+
+
+def _probe_host(host: str) -> str:
+    return "127.0.0.1" if host in {"0.0.0.0", "::", "[::]", "*"} else host
+
+
+def runtime_token_speed(endpoints: list[tuple[str, int]]) -> dict[str, Any] | None:
+    successful = 0
+    active_requests = 0
+    prompt_tokens = 0.0
+    prompt_seconds = 0.0
+    decode_tokens = 0.0
+    decode_seconds = 0.0
+    current_prompt = 0.0
+    current_decode = 0.0
+    current_prompt_count = 0
+    current_decode_count = 0
+
+    for host, port in endpoints:
+        endpoint = f"{_probe_host(host)}:{port}"
+        try:
+            with urllib.request.urlopen(f"http://{endpoint}/metrics", timeout=0.75) as response:
+                metrics = _parse_prometheus_metrics(response.read().decode("utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        required = (
+            "llamacpp:prompt_tokens_total",
+            "llamacpp:prompt_seconds_total",
+            "llamacpp:tokens_predicted_total",
+            "llamacpp:tokens_predicted_seconds_total",
+        )
+        if not all(name in metrics for name in required):
+            continue
+
+        successful += 1
+        endpoint_prompt_tokens = metrics[required[0]]
+        endpoint_decode_tokens = metrics[required[2]]
+        cached = _runtime_speed_cache.setdefault(endpoint, {})
+        if (
+            endpoint_prompt_tokens < cached.get("prompt_tokens_total", 0)
+            or endpoint_decode_tokens < cached.get("decode_tokens_total", 0)
+        ):
+            cached.clear()
+        cached["prompt_tokens_total"] = endpoint_prompt_tokens
+        cached["decode_tokens_total"] = endpoint_decode_tokens
+
+        observed_prompt = metrics.get("llamacpp:prompt_tokens_seconds", 0.0)
+        observed_decode = metrics.get("llamacpp:predicted_tokens_seconds", 0.0)
+        if observed_prompt > 0:
+            cached["current_prompt_tps"] = observed_prompt
+        if observed_decode > 0:
+            cached["current_decode_tps"] = observed_decode
+        if cached.get("current_prompt_tps") is not None:
+            current_prompt += cached["current_prompt_tps"]
+            current_prompt_count += 1
+        if cached.get("current_decode_tps") is not None:
+            current_decode += cached["current_decode_tps"]
+            current_decode_count += 1
+
+        prompt_tokens += endpoint_prompt_tokens
+        prompt_seconds += metrics[required[1]]
+        decode_tokens += endpoint_decode_tokens
+        decode_seconds += metrics[required[3]]
+        active_requests += max(0, int(metrics.get("llamacpp:requests_processing", 0)))
+
+    if not successful:
+        return None
+    active_keys = {f"{_probe_host(host)}:{port}" for host, port in endpoints}
+    for stale in set(_runtime_speed_cache) - active_keys:
+        _runtime_speed_cache.pop(stale, None)
+    return {
+        "preprocessing": {
+            "current_tps": current_prompt if current_prompt_count else None,
+            "session_average_tps": prompt_tokens / prompt_seconds if prompt_seconds > 0 else None,
+        },
+        "decode": {
+            "current_tps": current_decode if current_decode_count else None,
+            "session_average_tps": decode_tokens / decode_seconds if decode_seconds > 0 else None,
+        },
+        "active_requests": active_requests,
+        "servers": successful,
+    }
+
+
+def telemetry(
+    loaded_count: int = 0,
+    loading_count: int = 0,
+    endpoints: list[tuple[str, int]] | None = None,
+) -> dict[str, Any]:
     memory_hardware = _memory_hardware()
     if psutil:
         cpu_percent = float(psutil.cpu_percent(interval=None))
@@ -135,4 +238,5 @@ def telemetry(loaded_count: int = 0, loading_count: int = 0) -> dict[str, Any]:
         "memory_used_bytes": memory_total_bytes - memory_available_bytes if memory_total_bytes is not None else None,
         "memory_type": memory_hardware["type"],
         "memory_speed_mts": memory_hardware["speed_mts"],
+        "token_speed": runtime_token_speed(endpoints or []),
     }

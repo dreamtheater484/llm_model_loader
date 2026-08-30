@@ -76,6 +76,7 @@ class RunHistoryTests(unittest.TestCase):
                 "--host",
                 "0.0.0.0",
                 "--perf",
+                "--metrics",
                 "--ui-config",
                 '{"showMessageStats":true}',
             ],
@@ -104,6 +105,7 @@ class RunHistoryTests(unittest.TestCase):
                 "--host",
                 "127.0.0.1",
                 flag,
+                "--metrics",
                 "--ui-config",
                 '{"showMessageStats":false}',
             ]

@@ -30,6 +30,8 @@ def _with_loader_defaults(args: list[str]) -> list[str]:
         result = [*result, "--host", "0.0.0.0"]
     if "--perf" not in result and "--no-perf" not in result:
         result = [*result, "--perf"]
+    if "--metrics" not in result:
+        result = [*result, "--metrics"]
     ui_config_flags = {"--ui-config", "--webui-config", "--ui-config-file", "--webui-config-file"}
     if not any(flag in result for flag in ui_config_flags):
         result = [*result, "--ui-config", '{"showMessageStats":true}']
@@ -66,6 +68,17 @@ class RunManager:
         loaded = sum(row["n"] for row in rows if row["status"] == "loaded")
         loading = sum(row["n"] for row in rows if row["status"] == "loading")
         return loaded, loading
+
+    def active_endpoints(self) -> list[tuple[str, int]]:
+        rows = store.rows(
+            "select host, port from runs where status='loaded' order by started_at desc"
+        )
+        endpoints: list[tuple[str, int]] = []
+        for row in rows:
+            endpoint = (row.get("host") or "127.0.0.1", int(row.get("port") or 8080))
+            if endpoint not in endpoints:
+                endpoints.append(endpoint)
+        return endpoints
 
     def list(self) -> list[dict[str, Any]]:
         self.reconcile_stale_runs()

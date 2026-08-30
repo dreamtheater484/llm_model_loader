@@ -71,7 +71,7 @@ main {
   top: 0;
   z-index: 10;
   display: grid;
-  grid-template-columns: 240px 1fr 34px;
+  grid-template-columns: 200px 1fr 34px;
   gap: 10px;
   align-items: center;
   min-height: 66px;
@@ -98,7 +98,7 @@ main {
 
 .metrics {
   display: grid;
-  grid-template-columns: minmax(220px, 1.35fr) minmax(220px, 1.35fr) repeat(3, minmax(70px, .65fr)) minmax(320px, 2fr) minmax(70px, .65fr);
+  grid-template-columns: minmax(170px, 1.25fr) minmax(170px, 1.25fr) repeat(3, minmax(60px, .5fr)) minmax(95px, .6fr) minmax(235px, 1.75fr) minmax(215px, 1.2fr);
   gap: 8px;
 }
 
@@ -123,6 +123,12 @@ main {
   white-space: nowrap;
 }
 
+.metric:not(.wide) b {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
 .metric:not(.wide) > svg {
   grid-row: 1 / span 2;
   align-self: center;
@@ -138,17 +144,39 @@ main {
   margin-bottom: 4px;
 }
 
-.sessionCostMetric > div {
+.sessionCostMetric > div,
+.speedMetric > div {
   min-width: 0;
 }
 
-.sessionCostMetric small {
+.sessionCostMetric small,
+.speedMetric small {
   display: block;
   overflow: hidden;
   color: #667386;
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.speedMetric b,
+.speedMetric small {
+  display: flex;
+  gap: 7px;
+  align-items: baseline;
+}
+
+.speedMetric b {
+  margin-bottom: 2px !important;
+  font-size: 12px;
+}
+
+.speedMetric b > span,
+.speedMetric small > span {
+  flex: 0 0 58px;
+  color: #6b7584;
+  font-size: 10px;
+  font-weight: 500;
 }
 
 .iconButton {
@@ -1489,7 +1517,13 @@ h2 {
   .brand {
     display: none;
   }
-  .metrics, .grid.two, .settingsBand {
+  .metrics {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .metric.wide {
+    grid-column: span 2;
+  }
+  .grid.two, .settingsBand {
     grid-template-columns: 1fr;
   }
   .usageSummary, .usageInlineSummary, .usagePricingGrid {

@@ -170,7 +170,7 @@ def gpus() -> list[dict[str, Any]]:
 @app.get("/api/system/telemetry")
 def system_telemetry() -> dict[str, Any]:
     loaded, loading = run_manager.active_counts()
-    return telemetry(loaded, loading)
+    return telemetry(loaded, loading, run_manager.active_endpoints())
 
 
 @app.get("/api/hf/search")

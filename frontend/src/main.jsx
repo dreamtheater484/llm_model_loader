@@ -44,6 +44,7 @@ import {
   Search,
   Square,
   Star,
+  Timer,
   Trash2,
   Upload,
   X,
@@ -99,6 +100,14 @@ function formatTokens(value) {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 0 : 1)}M`;
   if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(tokens >= 10_000 ? 0 : 1)}k`;
   return tokens.toLocaleString();
+}
+
+function formatTokenRate(value) {
+  if (value == null) return "—";
+  const rate = Number(value);
+  if (!Number.isFinite(rate)) return "—";
+  if (rate >= 1000) return `${(rate / 1000).toFixed(rate >= 10_000 ? 0 : 1)}k`;
+  return rate.toFixed(rate >= 100 ? 0 : 1);
 }
 
 function formatCost(value, currency = "USD") {
@@ -174,6 +183,8 @@ function TopTelemetry({ telemetry, usage, refresh }) {
       ? `${sessionUsage.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? sessionUsage.cost || "0" : formatCost(sessionUsage.cost, sessionCurrency)}`
       : "—";
   const cacheCategoryMissing = sessionUsage?.missing_rates?.includes("cache_read") || sessionUsage?.missing_rates?.includes("cache_write");
+  const tokenSpeed = telemetry?.token_speed;
+  const speedLine = (scope) => `Prep ${formatTokenRate(tokenSpeed?.preprocessing?.[scope])} · Decode ${formatTokenRate(tokenSpeed?.decode?.[scope])}`;
   return (
     <header className="topbar">
       <div className="brand">
@@ -215,6 +226,11 @@ function TopTelemetry({ telemetry, usage, refresh }) {
           <label>CPU</label>
           <b>{telemetry?.cpu_load_percent == null ? "n/a" : `${telemetry.cpu_load_percent.toFixed(0)}%`}</b>
         </div>
+        <div className="metric">
+          <Activity size={15} />
+          <label>Models</label>
+          <b>{telemetry?.loaded_models || 0} live / {telemetry?.loading_models || 0} loading</b>
+        </div>
         <div className="metric wide sessionCostMetric" title={usage?.recent_task?.title || "Most recently updated OpenCode task"}>
           <CircleDollarSign size={15} />
           <div>
@@ -223,10 +239,16 @@ function TopTelemetry({ telemetry, usage, refresh }) {
             <small>{sessionUsage ? `in ${sessionCost(sessionCosts.input, "input")} · out ${sessionCost(sessionCosts.output, "output")} · cache ${cacheCategoryMissing ? "—" : `${sessionUsage.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? sessionCosts.cache || "0" : formatCost(sessionCosts.cache, sessionCurrency)}`}` : "No OpenCode session"}</small>
           </div>
         </div>
-        <div className="metric">
-          <Activity size={15} />
-          <label>Models</label>
-          <b>{telemetry?.loaded_models || 0} live / {telemetry?.loading_models || 0} loading</b>
+        <div
+          className="metric wide speedMetric"
+          title="Current is the latest runtime sample. Session average is weighted from server start. Preprocessing excludes cached prompt tokens."
+        >
+          <Timer size={15} />
+          <div>
+            <label>Token speed · tok/s</label>
+            <b><span>Current</span>{speedLine("current_tps")}</b>
+            <small><span>Session avg</span>{speedLine("session_average_tps")}</small>
+          </div>
         </div>
       </div>
       <IconButton icon={RefreshCw} label="Refresh telemetry" onClick={refresh} />

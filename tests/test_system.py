@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from backend.app import system
 
@@ -8,6 +8,7 @@ from backend.app import system
 class SystemTelemetryTests(unittest.TestCase):
     def tearDown(self):
         system._memory_hardware.cache_clear()
+        system._runtime_speed_cache.clear()
 
     def test_telemetry_includes_memory_usage_and_hardware(self):
         fake_psutil = SimpleNamespace(
@@ -49,6 +50,49 @@ class SystemTelemetryTests(unittest.TestCase):
         )
 
         self.assertEqual(system._memory_hardware(), {"type": "DDR5", "speed_mts": 6000})
+
+    def test_runtime_token_speed_reports_latest_and_session_average(self):
+        response = Mock()
+        response.read.return_value = b"""
+llamacpp:prompt_tokens_total 1200
+llamacpp:prompt_seconds_total 0.8
+llamacpp:tokens_predicted_total 500
+llamacpp:tokens_predicted_seconds_total 5
+llamacpp:prompt_tokens_seconds 1750
+llamacpp:predicted_tokens_seconds 105
+llamacpp:requests_processing 1
+"""
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        with patch.object(system.urllib.request, "urlopen", return_value=response) as urlopen:
+            result = system.runtime_token_speed([("0.0.0.0", 8080)])
+
+        urlopen.assert_called_once_with("http://127.0.0.1:8080/metrics", timeout=0.75)
+        self.assertEqual(result["preprocessing"]["current_tps"], 1750)
+        self.assertEqual(result["preprocessing"]["session_average_tps"], 1500)
+        self.assertEqual(result["decode"]["current_tps"], 105)
+        self.assertEqual(result["decode"]["session_average_tps"], 100)
+        self.assertEqual(result["active_requests"], 1)
+
+    def test_runtime_token_speed_keeps_last_nonzero_sample(self):
+        payloads = [
+            b"""llamacpp:prompt_tokens_total 100\nllamacpp:prompt_seconds_total 1\nllamacpp:tokens_predicted_total 100\nllamacpp:tokens_predicted_seconds_total 2\nllamacpp:prompt_tokens_seconds 100\nllamacpp:predicted_tokens_seconds 50\n""",
+            b"""llamacpp:prompt_tokens_total 100\nllamacpp:prompt_seconds_total 1\nllamacpp:tokens_predicted_total 100\nllamacpp:tokens_predicted_seconds_total 2\nllamacpp:prompt_tokens_seconds 0\nllamacpp:predicted_tokens_seconds 0\n""",
+        ]
+
+        def open_metrics(*args, **kwargs):
+            response = Mock()
+            response.read.return_value = payloads.pop(0)
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            return response
+
+        with patch.object(system.urllib.request, "urlopen", side_effect=open_metrics):
+            system.runtime_token_speed([("127.0.0.1", 8080)])
+            result = system.runtime_token_speed([("127.0.0.1", 8080)])
+
+        self.assertEqual(result["preprocessing"]["current_tps"], 100)
+        self.assertEqual(result["decode"]["current_tps"], 50)
 
 
 if __name__ == "__main__":
