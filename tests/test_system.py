@@ -55,15 +55,29 @@ class SystemTelemetryTests(unittest.TestCase):
 
     def test_power_tracker_integrates_session_and_lifetime_energy(self):
         saved = []
-        tracker = system.PowerTracker(total_ever_wh=2000, save_total_ever_wh=saved.append)
+        saved_seconds = []
+        tracker = system.PowerTracker(
+            total_ever_wh=2000,
+            total_ever_seconds=3600,
+            save_total_ever_wh=saved.append,
+            save_total_ever_seconds=saved_seconds.append,
+        )
 
         first = tracker.sample(300, 100)
         second = tracker.sample(300, 110)
 
-        self.assertEqual(first, {"session_kwh": 0.0, "total_ever_kwh": 2.0})
+        self.assertEqual(first, {
+            "session_kwh": 0.0,
+            "session_measured_seconds": 0.0,
+            "total_ever_kwh": 2.0,
+            "total_ever_measured_seconds": 3600,
+        })
         self.assertAlmostEqual(second["session_kwh"], 300 * 10 / 3_600_000)
+        self.assertEqual(second["session_measured_seconds"], 10)
         self.assertAlmostEqual(second["total_ever_kwh"], 2 + second["session_kwh"])
+        self.assertEqual(second["total_ever_measured_seconds"], 3610)
         self.assertAlmostEqual(saved[-1], 2000 + (300 * 10 / 3600))
+        self.assertEqual(saved_seconds[-1], 3610)
 
     def test_power_tracker_does_not_fill_long_sampling_gaps(self):
         tracker = system.PowerTracker()
@@ -72,6 +86,7 @@ class SystemTelemetryTests(unittest.TestCase):
         result = tracker.sample(300, 120)
 
         self.assertEqual(result["session_kwh"], 0)
+        self.assertEqual(result["session_measured_seconds"], 0)
 
     def test_telemetry_reports_estimated_system_power_breakdown(self):
         fake_psutil = SimpleNamespace(
@@ -91,6 +106,8 @@ class SystemTelemetryTests(unittest.TestCase):
         self.assertEqual(result["power"]["cpu_w"], 45.0)
         self.assertAlmostEqual(result["power"]["current_system_w"], (225 + 45 + 35) / 0.9)
         self.assertEqual(result["power"]["session_kwh"], 0.0)
+        self.assertEqual(result["power"]["session_measured_seconds"], 0.0)
+        self.assertEqual(result["power"]["total_ever_measured_seconds"], 0.0)
 
     @patch.object(system.sys, "platform", "win32")
     @patch.object(system.subprocess, "run")

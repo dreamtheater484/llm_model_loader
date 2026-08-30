@@ -127,6 +127,20 @@ function formatEnergy(value, historical = false) {
   return `${kwh.toFixed(2)} kWh`;
 }
 
+function formatMeasuredTime(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value)) return "—";
+  const total = Math.max(0, Math.floor(value));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainingSeconds = total % 60;
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return `${minutes}m ${remainingSeconds}s`;
+  return `${remainingSeconds}s`;
+}
+
 function formatCost(value, currency = "USD") {
   if (value == null || value === "") return "—";
   const amount = Number(value);
@@ -218,6 +232,9 @@ function TopTelemetry({ telemetry, usage, refresh }) {
       ? `${sessionUsage.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? sessionUsage.cost || "0" : formatCost(sessionUsage.cost, sessionCurrency)}`
       : "—";
   const cacheCategoryMissing = sessionUsage?.missing_rates?.includes("cache_read") || sessionUsage?.missing_rates?.includes("cache_write");
+  const sessionCacheCost = cacheCategoryMissing
+    ? "—"
+    : `${sessionUsage?.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? sessionCosts.cache || "0" : formatCost(sessionCosts.cache, sessionCurrency)}`;
   const tokenSpeed = telemetry?.token_speed;
   const power = telemetry?.power;
   const speedLine = (scope) => `Prep ${formatTokenRate(tokenSpeed?.preprocessing?.[scope])} · Decode ${formatTokenRate(tokenSpeed?.decode?.[scope])}`;
@@ -267,14 +284,17 @@ function TopTelemetry({ telemetry, usage, refresh }) {
             <span className="powerStat powerCurrent">
               <label>Current</label>
               <b>{formatPower(power?.current_system_w)}</b>
+              <small>estimated</small>
             </span>
             <span className="powerStat">
               <label>Session</label>
               <b>{formatEnergy(power?.session_kwh)}</b>
+              <small>{formatMeasuredTime(power?.session_measured_seconds)}</small>
             </span>
             <span className="powerStat">
               <label>All time</label>
               <b>{formatEnergy(power?.total_ever_kwh, true)}</b>
+              <small>{formatMeasuredTime(power?.total_ever_measured_seconds)}</small>
             </span>
           </button>
           <div className="powerPopover" id="power-breakdown" role="tooltip">
@@ -284,7 +304,9 @@ function TopTelemetry({ telemetry, usage, refresh }) {
             <span><em>Platform · estimated</em><b>{formatPower(power?.platform_overhead_w)}</b></span>
             <span><em>PSU efficiency</em><b>{power?.psu_efficiency ? `${Math.round(power.psu_efficiency * 100)}%` : "—"}</b></span>
             <span className="powerPopoverTotal"><em>Current wall estimate</em><b>{formatPower(power?.current_system_w)}</b></span>
-            <small>Session starts with the backend. All-time energy is recorded from when power tracking was enabled.</small>
+            <span><em>Session measured</em><b>{formatMeasuredTime(power?.session_measured_seconds)}</b></span>
+            <span><em>All-time measured</em><b>{formatMeasuredTime(power?.total_ever_measured_seconds)}</b></span>
+            <small>Measured time includes only intervals used for the energy calculation and excludes telemetry gaps.</small>
           </div>
         </section>
         <section className="telemetryGroup sessionTelemetry">
@@ -294,23 +316,41 @@ function TopTelemetry({ telemetry, usage, refresh }) {
               <label>Models</label>
               <b><i />{telemetry?.loaded_models || 0} live / {telemetry?.loading_models || 0} loading</b>
             </div>
-            <div className="dashboardMetric sessionCostMetric" title={usage?.recent_task?.title || "Most recently updated OpenCode task"}>
+            <div className="dashboardMetric dashboardPopoverMetric sessionCostMetric">
               <span className="metricIcon sessionCostIcon"><CircleDollarSign size={15} /></span>
-              <div>
+              <button className="metricSummaryButton" type="button" aria-describedby="session-cost-breakdown">
                 <label>Session cost</label>
                 <b>{sessionTotal}</b>
-                <small>{sessionUsage ? `in ${sessionCost(sessionCosts.input, "input")} · out ${sessionCost(sessionCosts.output, "output")} · cache ${cacheCategoryMissing ? "—" : `${sessionUsage.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? sessionCosts.cache || "0" : formatCost(sessionCosts.cache, sessionCurrency)}`}` : "No OpenCode session"}</small>
+              </button>
+              <div className="dashboardPopover sessionCostPopover" id="session-cost-breakdown" role="tooltip">
+                <strong>Session cost breakdown</strong>
+                <span><em>Input</em><b>{sessionUsage ? sessionCost(sessionCosts.input, "input") : "—"}</b></span>
+                <span><em>Output</em><b>{sessionUsage ? sessionCost(sessionCosts.output, "output") : "—"}</b></span>
+                <span><em>Cache</em><b>{sessionUsage ? sessionCacheCost : "—"}</b></span>
+                <span className="dashboardPopoverTotal"><em>Total</em><b>{sessionTotal}</b></span>
+                <small>{usage?.recent_task?.title || "No OpenCode session selected."}</small>
               </div>
             </div>
-            <div
-              className="dashboardMetric speedMetric"
-              title="Current is the latest runtime sample. Session average is weighted from server start. Preprocessing excludes cached prompt tokens."
-            >
+            <div className="dashboardMetric dashboardPopoverMetric speedMetric">
               <span className="metricIcon speedIcon"><Timer size={15} /></span>
-              <div>
-                <label>Token speed · tok/s</label>
-                <b><span>Current</span>{speedLine("current_tps")}</b>
-                <small><span>Session avg</span>{speedLine("session_average_tps")}</small>
+              <button className="metricSummaryButton speedSummaryButton" type="button" aria-describedby="token-speed-breakdown">
+                <label>Token speed <span>Current · tok/s</span></label>
+                <b>{speedLine("current_tps")}</b>
+              </button>
+              <div className="dashboardPopover speedPopover" id="token-speed-breakdown" role="tooltip">
+                <strong>Token speed details</strong>
+                <div className="dashboardPopoverSection">
+                  <label>Current</label>
+                  <span><em>Preprocessing</em><b>{formatTokenRate(tokenSpeed?.preprocessing?.current_tps)} tok/s</b></span>
+                  <span><em>Decode</em><b>{formatTokenRate(tokenSpeed?.decode?.current_tps)} tok/s</b></span>
+                </div>
+                <div className="dashboardPopoverSection">
+                  <label>Session average</label>
+                  <span><em>Preprocessing</em><b>{formatTokenRate(tokenSpeed?.preprocessing?.session_average_tps)} tok/s</b></span>
+                  <span><em>Decode</em><b>{formatTokenRate(tokenSpeed?.decode?.session_average_tps)} tok/s</b></span>
+                </div>
+                <span className="dashboardPopoverTotal"><em>Runtime</em><b>{tokenSpeed?.active_requests ?? 0} active · {tokenSpeed?.servers ?? 0} servers</b></span>
+                <small>Current is the latest runtime sample. Session averages are weighted from server start. Preprocessing excludes cached prompt tokens.</small>
               </div>
             </div>
           </div>

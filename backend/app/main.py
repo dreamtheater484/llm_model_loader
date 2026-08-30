@@ -45,9 +45,18 @@ def _stored_power_total_wh() -> float:
         return 0.0
 
 
+def _stored_power_total_seconds() -> float:
+    try:
+        return float(store.setting("power_total_ever_seconds") or 0)
+    except ValueError:
+        return 0.0
+
+
 power_tracker = PowerTracker(
     total_ever_wh=_stored_power_total_wh(),
+    total_ever_seconds=_stored_power_total_seconds(),
     save_total_ever_wh=lambda value: store.set_setting("power_total_ever_wh", f"{value:.9f}"),
+    save_total_ever_seconds=lambda value: store.set_setting("power_total_ever_seconds", f"{value:.6f}"),
 )
 
 

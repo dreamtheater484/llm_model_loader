@@ -399,6 +399,16 @@ main {
   white-space: nowrap;
 }
 
+.powerStat small {
+  display: block;
+  overflow: hidden;
+  color: #8792a1;
+  font-size: 9px;
+  line-height: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .powerCurrent {
   padding-left: 0;
   border-left: 0;
@@ -449,6 +459,10 @@ main {
   font-size: 11px;
 }
 
+.powerPopover > span b {
+  white-space: nowrap;
+}
+
 .powerPopover em {
   color: #6c798a;
   font-style: normal;
@@ -467,35 +481,170 @@ main {
   line-height: 14px;
 }
 
-.sessionCostMetric small,
-.speedMetric small {
+.dashboardPopoverMetric {
+  position: relative;
+}
+
+.metricSummaryButton {
   display: block;
-  overflow: hidden;
-  color: #728093;
-  font-size: 10px;
-  line-height: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  text-align: left;
 }
 
-.speedMetric b,
-.speedMetric small {
+.metricSummaryButton:hover,
+.metricSummaryButton:focus-visible {
+  background: #f6f2ff;
+  outline: 1px solid #ded2f4;
+}
+
+.speedSummaryButton:hover,
+.speedSummaryButton:focus-visible {
+  background: #edf9fb;
+  outline-color: #bfe3e8;
+}
+
+.speedSummaryButton label {
   display: flex;
-  gap: 4px;
-  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
 }
 
-.speedMetric b {
-  margin-bottom: 1px;
+.speedSummaryButton label span {
+  color: #8a95a3;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.speedSummaryButton b {
   font-size: 12px;
 }
 
-.speedMetric b > span,
-.speedMetric small > span {
-  flex: 0 0 50px;
-  color: #718094;
+.dashboardPopover {
+  position: absolute;
+  top: calc(100% + 25px);
+  z-index: 35;
+  display: grid;
+  width: 292px;
+  gap: 5px;
+  padding: 10px 11px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 10px 24px #1e2d3d26;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.sessionCostPopover {
+  left: 50%;
+  transform: translate(-50%, -3px);
+}
+
+.speedPopover {
+  right: 0;
+  transform: translateY(-3px);
+}
+
+.dashboardPopoverMetric:hover .sessionCostPopover,
+.dashboardPopoverMetric:focus-within .sessionCostPopover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.dashboardPopoverMetric:hover .speedPopover,
+.dashboardPopoverMetric:focus-within .speedPopover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.dashboardMetric .dashboardPopover > strong {
+  margin-bottom: 2px;
+  color: #273546;
+  font-size: 12px;
+}
+
+.dashboardMetric .dashboardPopover > span,
+.dashboardMetric .dashboardPopoverSection > span {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  color: #2c3949;
+  font-size: 11px;
+}
+
+.dashboardMetric .dashboardPopover em {
+  color: #6c798a;
+  font-style: normal;
+}
+
+.dashboardMetric .dashboardPopover b {
+  display: block;
+  overflow: visible;
+  color: #273546;
+  font-size: 11px;
+  line-height: normal;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.dashboardMetric .dashboardPopoverTotal {
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid #e3e8ee;
+}
+
+.dashboardMetric .dashboardPopoverTotal b {
+  font-weight: 700;
+}
+
+.dashboardPopoverSection {
+  display: grid;
+  gap: 4px;
+  padding-top: 2px;
+}
+
+.dashboardPopoverSection + .dashboardPopoverSection {
+  margin-top: 2px;
+  padding-top: 7px;
+  border-top: 1px solid #edf0f4;
+}
+
+.dashboardMetric .dashboardPopoverSection > label {
+  display: block;
+  overflow: visible;
+  color: #8a6ec4;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 11px;
+  letter-spacing: .04em;
+  text-overflow: clip;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.speedPopover .dashboardPopoverSection > label {
+  color: #168da0;
+}
+
+.dashboardMetric .dashboardPopover > small {
+  display: block;
+  overflow: visible;
+  margin-top: 2px;
+  color: #7a8695;
   font-size: 10px;
-  font-weight: 500;
+  line-height: 14px;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .iconButton {

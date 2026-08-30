@@ -110,11 +110,16 @@ class PowerTracker:
     def __init__(
         self,
         total_ever_wh: float = 0.0,
+        total_ever_seconds: float = 0.0,
         save_total_ever_wh: Any | None = None,
+        save_total_ever_seconds: Any | None = None,
     ) -> None:
         self.session_wh = 0.0
+        self.session_seconds = 0.0
         self.total_ever_wh = max(0.0, total_ever_wh)
+        self.total_ever_seconds = max(0.0, total_ever_seconds)
         self._save_total_ever_wh = save_total_ever_wh
+        self._save_total_ever_seconds = save_total_ever_seconds
         self._last_timestamp: float | None = None
         self._last_power_w: float | None = None
         self._lock = threading.Lock()
@@ -126,14 +131,20 @@ class PowerTracker:
                 if 0 < elapsed <= _MAX_POWER_SAMPLE_INTERVAL_SECONDS:
                     added_wh = ((self._last_power_w + power_w) / 2) * elapsed / 3600
                     self.session_wh += added_wh
+                    self.session_seconds += elapsed
                     self.total_ever_wh += added_wh
+                    self.total_ever_seconds += elapsed
                     if self._save_total_ever_wh:
                         self._save_total_ever_wh(self.total_ever_wh)
+                    if self._save_total_ever_seconds:
+                        self._save_total_ever_seconds(self.total_ever_seconds)
             self._last_timestamp = timestamp
             self._last_power_w = power_w
             return {
                 "session_kwh": self.session_wh / 1000,
+                "session_measured_seconds": self.session_seconds,
                 "total_ever_kwh": self.total_ever_wh / 1000,
+                "total_ever_measured_seconds": self.total_ever_seconds,
             }
 
 
@@ -300,7 +311,9 @@ def telemetry(
         estimated_system_power_w = (gpu_power_w + cpu_power_w + _POWER_PLATFORM_OVERHEAD_W) / _POWER_PSU_EFFICIENCY
     energy = power_tracker.sample(estimated_system_power_w, timestamp) if power_tracker else {
         "session_kwh": 0.0,
+        "session_measured_seconds": 0.0,
         "total_ever_kwh": 0.0,
+        "total_ever_measured_seconds": 0.0,
     }
     return {
         "timestamp": timestamp,
@@ -316,7 +329,9 @@ def telemetry(
             "platform_overhead_w": _POWER_PLATFORM_OVERHEAD_W,
             "psu_efficiency": _POWER_PSU_EFFICIENCY,
             "session_kwh": energy["session_kwh"],
+            "session_measured_seconds": energy["session_measured_seconds"],
             "total_ever_kwh": energy["total_ever_kwh"],
+            "total_ever_measured_seconds": energy["total_ever_measured_seconds"],
             "estimated": True,
         },
         "memory_total_bytes": memory_total_bytes,
