@@ -20,7 +20,6 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   Activity,
   BarChart3,
-  Boxes,
   ChevronUp,
   CircleDollarSign,
   Cpu,
@@ -94,6 +93,11 @@ function formatDuration(seconds) {
   return `${s}s`;
 }
 
+function formatGpuMemory(value) {
+  if (value == null) return "unknown";
+  return `${(value / 1024).toFixed(1)} GB`;
+}
+
 function formatTokens(value) {
   const tokens = Number(value || 0);
   if (!Number.isFinite(tokens)) return "0";
@@ -119,9 +123,8 @@ function formatPower(value) {
 function formatEnergy(value, historical = false) {
   const kwh = Number(value);
   if (!Number.isFinite(kwh)) return "—";
-  if (historical && kwh >= 1000) return `${(kwh / 1000).toFixed(kwh >= 10_000 ? 1 : 2)} MWh`;
-  const digits = kwh < 0.1 ? 4 : kwh < 10 ? 3 : kwh < 100 ? 2 : 1;
-  return `${kwh.toFixed(digits)} kWh`;
+  if (historical && kwh >= 1000) return `${(kwh / 1000).toFixed(2)} MWh`;
+  return `${kwh.toFixed(2)} kWh`;
 }
 
 function formatCost(value, currency = "USD") {
@@ -172,12 +175,30 @@ function IconButton({ icon: Icon, label, className = "", ...props }) {
   );
 }
 
+function LoaderLogo() {
+  return (
+    <svg viewBox="0 0 40 40" aria-hidden="true">
+      <path className="logoFrame" d="M20 3.5 34.5 11.8v16.4L20 36.5 5.5 28.2V11.8Z" />
+      <path className="logoLayer logoLayerTop" d="m11.2 13.1 8.8-5 8.8 5-8.8 5Z" />
+      <path className="logoLayer logoLayerMiddle" d="m11.2 19.2 8.8 5 8.8-5" />
+      <path className="logoLayer logoLayerBottom" d="m11.2 25.4 8.8 5 8.8-5" />
+      <path className="logoLoad" d="M20 14.2v11.1m-3.1-3.2 3.1 3.2 3.1-3.2" />
+    </svg>
+  );
+}
+
 function TopTelemetry({ telemetry, usage, refresh }) {
   const gpu = telemetry?.gpus?.[0];
+  const gpuName = gpu?.name?.replace(/^NVIDIA\s+(GeForce\s+)?/i, "") || "No NVIDIA GPU detected";
   const used = gpu ? percent(gpu.memory_used_mib, gpu.memory_total_mib) : 0;
   const memoryUsed = telemetry?.memory_used_bytes;
   const memoryTotal = telemetry?.memory_total_bytes;
   const memoryPercent = percent(memoryUsed, memoryTotal);
+  const memoryUsedText = formatBytes(memoryUsed);
+  const memoryTotalText = formatBytes(memoryTotal);
+  const memoryUsageText = memoryUsedText.endsWith(" GB") && memoryTotalText.endsWith(" GB")
+    ? `${memoryUsedText.slice(0, -3)} / ${memoryTotalText} used`
+    : `${memoryUsedText} / ${memoryTotalText} used`;
   const memoryDetails = [
     telemetry?.memory_type || "RAM",
     telemetry?.memory_speed_mts ? `${telemetry.memory_speed_mts} MT/s` : null
@@ -203,9 +224,9 @@ function TopTelemetry({ telemetry, usage, refresh }) {
   return (
     <header className="topbar">
       <div className="brand">
-        <span className="brandMark"><Boxes size={19} /></span>
+        <span className="brandMark"><LoaderLogo /></span>
         <div>
-          <strong>LLM Model Loader</strong>
+          <strong>LLM Loader</strong>
           <span>llama.cpp control surface</span>
         </div>
       </div>
@@ -216,8 +237,8 @@ function TopTelemetry({ telemetry, usage, refresh }) {
             <div className="dashboardMetric memoryMetric">
               <span className="metricIcon memoryGpu"><HardDrive size={15} /></span>
               <div>
-                <label>{gpu?.name || "No NVIDIA GPU detected"}</label>
-                <b>{gpu ? `${formatMib(gpu.memory_free_mib)} free / ${formatMib(gpu.memory_total_mib)}` : "Unavailable"}</b>
+                <label>{gpuName}</label>
+                <b>{gpu ? `${formatGpuMemory(gpu.memory_free_mib)} / ${formatGpuMemory(gpu.memory_total_mib)} free` : "Unavailable"}</b>
                 <Progress value={used} />
               </div>
             </div>
@@ -225,7 +246,7 @@ function TopTelemetry({ telemetry, usage, refresh }) {
               <span className="metricIcon memoryRam"><MemoryStick size={15} /></span>
               <div>
                 <label>{memoryDetails}</label>
-                <b>{memoryTotal == null ? "Unavailable" : `${formatBytes(memoryUsed)} used / ${formatBytes(memoryTotal)}`}</b>
+                <b>{memoryTotal == null ? "Unavailable" : memoryUsageText}</b>
                 <Progress value={memoryPercent} />
               </div>
             </div>
