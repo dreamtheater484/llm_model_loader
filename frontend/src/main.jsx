@@ -224,7 +224,7 @@ function TopTelemetry({ telemetry, usage, refresh }) {
   return (
     <header className="topbar">
       <div className="brand">
-        <span className="brandMark"><LoaderLogo /></span>
+        <span className="brandMark" title="LLM Loader"><LoaderLogo /></span>
         <div>
           <strong>LLM Loader</strong>
           <span>llama.cpp control surface</span>
