@@ -68,4 +68,24 @@ npm run dev
 
 Settings and metadata are stored in `%LOCALAPPDATA%\llm-model-loader\loader.sqlite3`. Managed models default to `D:\Documents\AI\models`, and `llama.cpp` is installed in `D:\Documents\AI\llama.cpp`.
 
+## OpenCode usage and cost tracking
+
+The dashboard reads OpenCode's SQLite database in read-only mode (normally
+`%USERPROFILE%\.local\share\opencode\opencode.db`) through the same backend;
+it does not start another service or copy the history. The **Usage & Cost**
+panel refreshes about every ten seconds and groups the counters OpenCode
+reports into input, cache read, cache write, output, and reasoning tokens.
+
+Expand **Usage & pricing** on a model card to enter per-million-token rates.
+Costs are estimates calculated with decimal arithmetic from the current rates;
+changing a rate therefore recalculates visible history. A blank reasoning rate
+inherits the output rate. If a local provider exposes reasoning content but no
+separate reasoning count, the dashboard labels it **Reasoning counted as output**
+because those tokens and their estimated cost are already included in the output
+bucket.
+
+If OpenCode is installed in a non-standard location, set the optional
+**OpenCode DB path** in Runtime Settings. Unknown provider/model identities are
+shown as **Unmapped** and can be assigned from a model's usage details.
+
 

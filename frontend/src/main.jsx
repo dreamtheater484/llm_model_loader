@@ -22,6 +22,7 @@ import {
   BarChart3,
   Boxes,
   ChevronUp,
+  CircleDollarSign,
   Cpu,
   Download,
   ChevronDown,
@@ -92,6 +93,31 @@ function formatDuration(seconds) {
   return `${s}s`;
 }
 
+function formatTokens(value) {
+  const tokens = Number(value || 0);
+  if (!Number.isFinite(tokens)) return "0";
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 0 : 1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(tokens >= 10_000 ? 0 : 1)}k`;
+  return tokens.toLocaleString();
+}
+
+function formatCost(value, currency = "USD") {
+  if (value == null || value === "") return "—";
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return "—";
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
+  } catch {
+    return `${currency} ${amount.toFixed(2)}`;
+  }
+}
+
+function formatDate(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleString();
+}
+
 function percent(done, total) {
   if (!total) return 0;
   return Math.max(0, Math.min(100, (done / total) * 100));
@@ -111,8 +137,8 @@ function Progress({ value }) {
   );
 }
 
-function Pill({ children, tone = "neutral" }) {
-  return <span className={`pill ${tone}`}>{children}</span>;
+function Pill({ children, tone = "neutral", title }) {
+  return <span className={`pill ${tone}`} title={title}>{children}</span>;
 }
 
 function IconButton({ icon: Icon, label, className = "", ...props }) {
@@ -123,7 +149,7 @@ function IconButton({ icon: Icon, label, className = "", ...props }) {
   );
 }
 
-function TopTelemetry({ telemetry, refresh }) {
+function TopTelemetry({ telemetry, usage, refresh }) {
   const gpu = telemetry?.gpus?.[0];
   const used = gpu ? percent(gpu.memory_used_mib, gpu.memory_total_mib) : 0;
   const memoryUsed = telemetry?.memory_used_bytes;
@@ -133,6 +159,21 @@ function TopTelemetry({ telemetry, refresh }) {
     telemetry?.memory_type || "RAM",
     telemetry?.memory_speed_mts ? `${telemetry.memory_speed_mts} MT/s` : null
   ].filter(Boolean).join(" · ");
+  const sessionUsage = usage?.recent_task?.usage;
+  const sessionCosts = sessionUsage?.costs || {};
+  const currencies = Array.from(new Set((usage?.models || []).map((item) => item.price_currency || "USD")));
+  const sessionCurrency = currencies.length === 1 ? currencies[0] : "USD";
+  const mixedCurrencies = currencies.length > 1;
+  const sessionCost = (value, category) => {
+    if (!sessionUsage || sessionUsage.cost_status === "unpriced" || sessionUsage.missing_rates?.includes(category)) return "—";
+    return `${sessionUsage.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? value || "0" : formatCost(value, sessionCurrency)}`;
+  };
+  const sessionTotal = sessionUsage?.cost_status === "unpriced"
+    ? "Unpriced"
+    : sessionUsage
+      ? `${sessionUsage.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? sessionUsage.cost || "0" : formatCost(sessionUsage.cost, sessionCurrency)}`
+      : "—";
+  const cacheCategoryMissing = sessionUsage?.missing_rates?.includes("cache_read") || sessionUsage?.missing_rates?.includes("cache_write");
   return (
     <header className="topbar">
       <div className="brand">
@@ -173,6 +214,14 @@ function TopTelemetry({ telemetry, refresh }) {
           <Cpu size={15} />
           <label>CPU</label>
           <b>{telemetry?.cpu_load_percent == null ? "n/a" : `${telemetry.cpu_load_percent.toFixed(0)}%`}</b>
+        </div>
+        <div className="metric wide sessionCostMetric" title={usage?.recent_task?.title || "Most recently updated OpenCode task"}>
+          <CircleDollarSign size={15} />
+          <div>
+            <label>Session cost</label>
+            <b>{sessionTotal}</b>
+            <small>{sessionUsage ? `in ${sessionCost(sessionCosts.input, "input")} · out ${sessionCost(sessionCosts.output, "output")} · cache ${cacheCategoryMissing ? "—" : `${sessionUsage.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? sessionCosts.cache || "0" : formatCost(sessionCosts.cache, sessionCurrency)}`}` : "No OpenCode session"}</small>
+          </div>
         </div>
         <div className="metric">
           <Activity size={15} />
@@ -242,6 +291,7 @@ function Settings({ settings, setSettings, toast }) {
         </div>
         <input value={draft.llama_server_path || ""} onChange={(event) => setDraft({ ...draft, llama_server_path: event.target.value })} placeholder="Path to llama-server.exe" />
         <input value={draft.model_dir || ""} onChange={(event) => setDraft({ ...draft, model_dir: event.target.value })} placeholder="Managed model directory" />
+        <input value={draft.opencode_db_path || ""} onChange={(event) => setDraft({ ...draft, opencode_db_path: event.target.value })} placeholder="OpenCode DB path (optional)" />
         <button onClick={discover}><Search size={14} /> Auto</button>
         <button onClick={() => loadBrowser(draft.llama_server_path ? draft.llama_server_path.replace(/\\[^\\]*$/, "") : "")}><FolderOpen size={14} /> Browse</button>
         <button className="primary" onClick={save}><Save size={14} /> Save</button>
@@ -735,7 +785,160 @@ function ModelDragPreview({ model }) {
   );
 }
 
-function Library({ models, reload, toast }) {
+const usageCategories = [
+  ["input_tokens", "Input"],
+  ["cache_read_tokens", "Cache read"],
+  ["cache_write_tokens", "Cache write"],
+  ["output_tokens", "Output"],
+  ["reasoning_tokens", "Reasoning"]
+];
+
+function UsageBreakdown({ stats }) {
+  if (!stats) return null;
+  return (
+    <div className="usageBreakdown">
+      {usageCategories.map(([key, label]) => (
+        <span className="usageChip" key={key}>
+          <small>{label}</small>
+          <strong>{formatTokens(stats[key])}</strong>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function UsageStatus({ stats }) {
+  if (!stats) return null;
+  const labels = {
+    unpriced: "Unpriced",
+    partially_priced: "Partially priced",
+    priced: "Priced",
+    no_usage: "No usage"
+  };
+  return (
+    <div className="usageFlags">
+      {stats.cost_status && <Pill tone={stats.cost_status === "priced" ? "loaded" : stats.cost_status === "no_usage" ? "neutral" : "orphaned"}>{labels[stats.cost_status] || stats.cost_status}</Pill>}
+      {stats.reasoning_status === "not_reported" && (
+        <Pill
+          title="The model does not give a separate reasoning token count. Reasoning is already included in Output and in the estimated cost."
+        >
+          Reasoning counted as output
+        </Pill>
+      )}
+      {!!stats.missing_rates?.length && <span className="usageMissing">Missing: {stats.missing_rates.join(", ")}</span>}
+    </div>
+  );
+}
+
+function ModelUsage({ model, usage, reload, reloadUsage, toast }) {
+  const modelUsage = usage?.models?.find((item) => item.model_id === model.id);
+  const stats = modelUsage?.usage;
+  const bindingSource = modelUsage?.bindings || model.bindings || [];
+  const bindingKey = bindingSource.map((binding) => `${binding.provider_id}\u0000${binding.external_model_id}`).join("\u0001");
+  const [draft, setDraft] = useState({});
+  const [bindings, setBindings] = useState([]);
+  const [providerId, setProviderId] = useState("");
+  const [externalModelId, setExternalModelId] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDraft({
+      currency: model.price_currency || "USD",
+      input_per_million: model.price_input_per_million || "",
+      cache_read_per_million: model.price_cache_read_per_million || "",
+      cache_write_per_million: model.price_cache_write_per_million || "",
+      output_per_million: model.price_output_per_million || "",
+      reasoning_per_million: model.price_reasoning_per_million || ""
+    });
+  }, [
+    model.id,
+    model.price_currency,
+    model.price_input_per_million,
+    model.price_cache_read_per_million,
+    model.price_cache_write_per_million,
+    model.price_output_per_million,
+    model.price_reasoning_per_million
+  ]);
+
+  useEffect(() => {
+    setBindings(bindingSource.map((binding) => ({
+      provider_id: binding.provider_id,
+      external_model_id: binding.external_model_id
+    })));
+  }, [model.id, bindingKey]);
+
+  function addBinding() {
+    const provider = providerId.trim();
+    const external = externalModelId.trim();
+    if (!provider || !external) return;
+    if (!bindings.some((binding) => binding.provider_id === provider && binding.external_model_id === external)) {
+      setBindings([...bindings, { provider_id: provider, external_model_id: external }]);
+    }
+    setProviderId("");
+    setExternalModelId("");
+  }
+
+  async function save() {
+    setSaving(true);
+    try {
+      await request(`/api/models/${model.id}/usage-settings`, { method: "PATCH", body: JSON.stringify({ ...draft, bindings }) });
+      await Promise.all([reload(), reloadUsage()]);
+      toast("Usage pricing saved");
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <details className="modelUsage">
+      <summary>
+        <ChevronRight className="modelUsageChevron" size={14} />
+        Usage & pricing
+        {stats?.total_tokens ? <span className="usageSummaryHint">{formatTokens(stats.total_tokens)} tokens</span> : null}
+      </summary>
+      <div className="modelUsageBody">
+        <div className="usageInlineSummary">
+          <span><small>Usage in selected range</small><strong>{formatTokens(stats?.total_tokens || 0)} tokens</strong></span>
+          <span><small>Estimated cost</small><strong>{formatCost(stats?.cost, model.price_currency || "USD")}</strong></span>
+          <span><small>Requests</small><strong>{(stats?.requests || 0).toLocaleString()}</strong></span>
+        </div>
+        <UsageBreakdown stats={stats} />
+        <UsageStatus stats={stats} />
+        <div className="usagePricingGrid">
+          <label>Currency<input value={draft.currency || "USD"} maxLength={8} onChange={(event) => setDraft({ ...draft, currency: event.target.value.toUpperCase() })} /></label>
+          <label>Input / MTok<input inputMode="decimal" value={draft.input_per_million || ""} onChange={(event) => setDraft({ ...draft, input_per_million: event.target.value })} placeholder="e.g. 1.00" /></label>
+          <label>Cache read / MTok<input inputMode="decimal" value={draft.cache_read_per_million || ""} onChange={(event) => setDraft({ ...draft, cache_read_per_million: event.target.value })} placeholder="e.g. 0.10" /></label>
+          <label>Cache write / MTok<input inputMode="decimal" value={draft.cache_write_per_million || ""} onChange={(event) => setDraft({ ...draft, cache_write_per_million: event.target.value })} placeholder="optional" /></label>
+          <label>Output / MTok<input inputMode="decimal" value={draft.output_per_million || ""} onChange={(event) => setDraft({ ...draft, output_per_million: event.target.value })} placeholder="e.g. 2.00" /></label>
+          <label>Reasoning / MTok<input inputMode="decimal" value={draft.reasoning_per_million || ""} onChange={(event) => setDraft({ ...draft, reasoning_per_million: event.target.value })} placeholder="blank = output" /></label>
+        </div>
+        <div className="usageBindings">
+          <div className="usageSubheading">OpenCode identity bindings</div>
+          {!bindings.length && <div className="empty inlineEmpty">Automatic aliases are used first. Add a binding only for an identity shown as Unmapped.</div>}
+          {!!bindings.length && <div className="bindingList">{bindings.map((binding) => (
+            <span className="bindingPill" key={`${binding.provider_id}/${binding.external_model_id}`}>
+              {binding.provider_id} / {binding.external_model_id}
+              <button type="button" title="Remove binding" aria-label="Remove binding" onClick={() => setBindings(bindings.filter((item) => item !== binding))}><X size={12} /></button>
+            </span>
+          ))}</div>}
+          <div className="bindingEditor">
+            <input value={providerId} onChange={(event) => setProviderId(event.target.value)} placeholder="Provider ID" />
+            <input value={externalModelId} onChange={(event) => setExternalModelId(event.target.value)} placeholder="OpenCode model ID" />
+            <button type="button" onClick={addBinding} disabled={!providerId.trim() || !externalModelId.trim()}><Plus size={14} /> Add</button>
+          </div>
+        </div>
+        <div className="usageEditorFoot">
+          <span>Changing rates recalculates all displayed history.</span>
+          <button className="primary" onClick={save} disabled={saving}><Save size={14} /> {saving ? "Saving" : "Save"}</button>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function Library({ models, usage, reload, reloadUsage, toast }) {
   const [orderedModels, setOrderedModels] = useState(models);
   const [activeModelId, setActiveModelId] = useState(null);
   const [editingScripts, setEditingScripts] = useState({});
@@ -909,6 +1112,7 @@ function Library({ models, reload, toast }) {
                       </div>
                       <IconButton icon={Trash2} label="Delete model" onClick={() => remove(model)} />
                     </div>
+                    <ModelUsage model={model} usage={usage} reload={reload} reloadUsage={reloadUsage} toast={toast} />
                     <details className="modelScripts">
                       <summary>
                         <ChevronRight className="modelScriptsChevron" size={14} />
@@ -943,6 +1147,106 @@ function Library({ models, reload, toast }) {
       </DndContext>
       </section>
     </>
+  );
+}
+
+function UsagePanel({ usage, range, setRange, page, setPage, reloadUsage, reload, toast }) {
+  if (!usage) {
+    return <section className="band usageBand"><div className="sectionTitle"><BarChart3 size={16} /><h2>Usage & Cost</h2></div><div className="empty">Loading OpenCode usage…</div></section>;
+  }
+  if (!usage.available) {
+    return (
+      <section className="band usageBand">
+        <div className="sectionTitle"><BarChart3 size={16} /><h2>Usage & Cost</h2><div className="spacer" /><button className="subtle" onClick={reloadUsage}><RefreshCw size={14} /> Refresh</button></div>
+        <div className="empty inlineEmpty"><strong>OpenCode usage unavailable.</strong> {usage.error || "Check the database path in Runtime Settings."}</div>
+      </section>
+    );
+  }
+  const summary = usage.summary || {};
+  const recent = usage.recent_task;
+  const history = usage.history || { items: [], total: 0, page: 0, page_size: 8 };
+  const pages = Math.max(1, Math.ceil((history.total || 0) / (history.page_size || 8)));
+  const currencies = Array.from(new Set((usage.models || []).map((item) => item.price_currency || "USD")));
+  const currency = currencies.length === 1 ? currencies[0] : "USD";
+  const mixedCurrencies = currencies.length > 1;
+  const displayCost = (value) => mixedCurrencies ? `${value || "0"} (mixed currencies)` : formatCost(value, currency);
+  async function assignIdentity(identity, targetModelId) {
+    if (!targetModelId) return;
+    const target = usage.models?.find((item) => item.model_id === targetModelId);
+    if (!target) return;
+    const bindings = [...(target.bindings || []), { provider_id: identity.provider_id, external_model_id: identity.external_model_id }];
+    try {
+      await request(`/api/models/${targetModelId}/usage-settings`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          currency: target.price_currency,
+          input_per_million: target.price_input_per_million,
+          cache_read_per_million: target.price_cache_read_per_million,
+          cache_write_per_million: target.price_cache_write_per_million,
+          output_per_million: target.price_output_per_million,
+          reasoning_per_million: target.price_reasoning_per_million,
+          bindings
+        })
+      });
+      await Promise.all([reload(), reloadUsage()]);
+      toast("OpenCode identity assigned");
+    } catch (error) {
+      toast(error.message);
+    }
+  }
+  return (
+    <section className="band usageBand">
+      <div className="sectionTitle">
+        <BarChart3 size={16} />
+        <h2>Usage & Cost</h2>
+        <div className="spacer" />
+        <select className="usageRange" value={range} onChange={(event) => { setRange(event.target.value); setPage(0); }} aria-label="Usage date range">
+          <option value="7d">7 days</option><option value="30d">30 days</option><option value="all">All</option>
+        </select>
+        <button className="subtle" onClick={reloadUsage} title="Refresh usage"><RefreshCw size={14} /></button>
+      </div>
+      <div className="usageSummary">
+        <span><small>Processed tokens</small><strong>{formatTokens(summary.total_tokens)}</strong></span>
+        <span><small>Estimated cost</small><strong>{displayCost(summary.cost)}</strong></span>
+        <span><small>Requests</small><strong>{(summary.requests || 0).toLocaleString()}</strong></span>
+        <span><small>Main / subagents</small><strong>{formatTokens(recent?.main?.total_tokens || 0)} / {formatTokens(recent?.subagents?.total_tokens || 0)}</strong></span>
+      </div>
+      <UsageBreakdown stats={summary} />
+      <UsageStatus stats={summary} />
+      {recent && (
+        <details className="usageTask" open>
+          <summary><ChevronRight className="usageTaskChevron" size={14} /><span><strong>{recent.title}</strong><small>{recent.model_names?.join(", ") || "Unknown model"} · {formatDate(recent.updated_at)}</small></span><b>{formatTokens(recent.usage?.total_tokens || 0)}</b></summary>
+          <div className="usageTaskBody">
+            <div className="usageTaskTotals"><span>Main <strong>{formatTokens(recent.main?.total_tokens || 0)}</strong></span><span>Subagents <strong>{formatTokens(recent.subagents?.total_tokens || 0)}</strong></span><span>Cost <strong>{displayCost(recent.usage?.cost)}</strong></span></div>
+            <UsageStatus stats={recent.usage} />
+            <div className="usageChildren">
+              <div className="usageChild"><span><strong>Main session</strong><small>{recent.main?.model_names?.join(", ") || "No recorded responses"}</small></span><b>{formatTokens(recent.main?.total_tokens || 0)}</b></div>
+              {(recent.children || []).map((child) => <div className="usageChild" key={child.session_id}><span><strong>{child.title}</strong><small>{child.agent || child.usage?.model_names?.join(", ") || "Subagent"}</small></span><b>{formatTokens(child.usage?.total_tokens || 0)}</b></div>)}
+            </div>
+          </div>
+        </details>
+      )}
+      {!recent && <div className="empty inlineEmpty">No usage yet.</div>}
+      <details className="usageHistory">
+        <summary><ChevronRight className="usageHistoryChevron" size={14} /> History ({history.total || 0} tasks)</summary>
+        <div className="table usageTable">
+          <div className="thead"><span>Updated</span><span>Task / model</span><span>Main</span><span>Subagents</span><span>Total</span><span>Cost</span></div>
+          {!history.items?.length && <div className="empty">No usage in this range.</div>}
+          {(history.items || []).map((item) => (
+            <div className="row" key={item.session_id}>
+              <span>{formatDate(item.updated_at)}</span>
+              <span className="usageHistoryTask"><strong title={item.title}>{item.title}</strong><small title={item.model_names?.join(", ")}>{item.model_names?.join(", ") || "Unknown model"}</small></span>
+              <span>{formatTokens(item.main?.total_tokens || 0)}</span>
+              <span>{formatTokens(item.subagents?.total_tokens || 0)}</span>
+              <span>{formatTokens(item.usage?.total_tokens || 0)}</span>
+              <span>{displayCost(item.usage?.cost)}</span>
+            </div>
+          ))}
+        </div>
+        {history.total > (history.page_size || 8) && <div className="pager"><button onClick={() => setPage(Math.max(0, page - 1))} disabled={page === 0}>Previous</button><span>Page {page + 1} / {pages}</span><button onClick={() => setPage(Math.min(pages - 1, page + 1))} disabled={page >= pages - 1}>Next</button></div>}
+      </details>
+      {!!usage.unmapped?.length && <details className="usageUnmapped"><summary><ChevronRight className="usageHistoryChevron" size={14} /> Unmapped identities ({usage.unmapped.length})</summary><div className="unmappedList">{usage.unmapped.map((item) => <div className="unmappedRow" key={`${item.provider_id}/${item.external_model_id}`}><span className="bindingPill unmapped">{item.provider_id} / {item.external_model_id} · {formatTokens(item.total_tokens)}</span><select defaultValue="" aria-label={`Assign ${item.external_model_id} to a model`} onChange={(event) => assignIdentity(item, event.target.value)}><option value="">Assign to model…</option>{(usage.models || []).map((model) => <option key={model.model_id} value={model.model_id}>{model.model_name}</option>)}</select></div>)}</div><small className="usageHelp">Assignment is saved as an explicit provider/model binding.</small></details>}
+    </section>
   );
 }
 
@@ -1203,6 +1507,9 @@ function App() {
   const [downloads, setDownloads] = useState([]);
   const [runs, setRuns] = useState([]);
   const [presets, setPresets] = useState([]);
+  const [usage, setUsage] = useState(null);
+  const [usageRange, setUsageRange] = useState("all");
+  const [usagePage, setUsagePage] = useState(0);
   const [toastText, setToastText] = useState("");
 
   const toast = useCallback((message) => {
@@ -1227,6 +1534,12 @@ function App() {
     setPresets(presetData);
   }, []);
 
+  const reloadUsage = useCallback(async () => {
+    const params = new URLSearchParams({ range: usageRange, page: String(usagePage) });
+    const usageData = await request(`/api/usage?${params.toString()}`);
+    setUsage(usageData);
+  }, [usageRange, usagePage]);
+
   useEffect(() => {
     reload().catch((error) => toast(error.message));
     const timer = window.setInterval(() => reload().catch(() => {}), 5000);
@@ -1238,19 +1551,26 @@ function App() {
     };
   }, [reload, toast]);
 
+  useEffect(() => {
+    reloadUsage().catch((error) => setUsage({ available: false, error: error.message, history: { items: [], total: 0, page: 0, page_size: 8 }, unmapped: [] }));
+    const timer = window.setInterval(() => reloadUsage().catch(() => {}), 10000);
+    return () => window.clearInterval(timer);
+  }, [reloadUsage]);
+
   return (
     <>
-      <TopTelemetry telemetry={telemetry} refresh={() => reload().catch((error) => toast(error.message))} />
+      <TopTelemetry telemetry={telemetry} usage={usage} refresh={() => reload().catch((error) => toast(error.message))} />
       <main>
         <Settings settings={settings} setSettings={setSettings} toast={toast} />
         <div className="grid two dashboardGrid">
           <div className="stack">
             <Discover toast={toast} reload={reload} telemetry={telemetry} />
-            <Library models={models} reload={reload} toast={toast} />
+            <Library models={models} usage={usage} reload={reload} reloadUsage={reloadUsage} toast={toast} />
           </div>
           <div className="stack">
             <ImportModel reload={reload} toast={toast} settings={settings} />
             <Downloads downloads={downloads} reload={reload} toast={toast} />
+            <UsagePanel usage={usage} range={usageRange} setRange={setUsageRange} page={usagePage} setPage={setUsagePage} reload={reload} reloadUsage={() => reloadUsage().catch(() => {})} toast={toast} />
             <Runs runs={runs} models={models} reload={reload} toast={toast} />
             <Benchmarks presets={presets} models={models} runs={runs} reload={reload} toast={toast} />
           </div>

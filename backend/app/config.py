@@ -42,4 +42,22 @@ def default_model_dir() -> Path:
     return ai_root() / "models"
 
 
+def default_opencode_db_path() -> Path:
+    """Return the normal OpenCode database location without creating it."""
+    override = os.environ.get("OPENCODE_DB_PATH")
+    if override:
+        return Path(override).expanduser()
+
+    candidates = [
+        user_home() / ".local" / "share" / "opencode" / "opencode.db",
+    ]
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "opencode" / "opencode.db")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
 DB_PATH = app_data_dir() / "loader.sqlite3"

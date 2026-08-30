@@ -44,7 +44,22 @@ class Store:
                     managed integer not null default 1,
                     manual_vram_mib integer,
                     display_order integer,
+                    price_currency text not null default 'USD',
+                    price_input_per_million text,
+                    price_cache_read_per_million text,
+                    price_cache_write_per_million text,
+                    price_output_per_million text,
+                    price_reasoning_per_million text,
                     created_at real not null
+                );
+                create table if not exists model_usage_bindings (
+                    id text primary key,
+                    model_id text not null,
+                    provider_id text not null,
+                    external_model_id text not null,
+                    created_at real not null,
+                    foreign key(model_id) references models(id) on delete cascade,
+                    unique(provider_id, external_model_id)
                 );
                 create table if not exists downloads (
                     id text primary key,
@@ -123,6 +138,17 @@ class Store:
             conn.execute("alter table models add column normalized_path text")
         if "display_order" not in columns:
             conn.execute("alter table models add column display_order integer")
+        if "price_currency" not in columns:
+            conn.execute("alter table models add column price_currency text not null default 'USD'")
+        for name in (
+            "price_input_per_million",
+            "price_cache_read_per_million",
+            "price_cache_write_per_million",
+            "price_output_per_million",
+            "price_reasoning_per_million",
+        ):
+            if name not in columns:
+                conn.execute(f"alter table models add column {name} text")
         for row in conn.execute("select id, path from models where normalized_path is null or normalized_path = ''").fetchall():
             conn.execute(
                 "update models set normalized_path = ? where id = ?",
@@ -138,6 +164,19 @@ class Store:
             ).fetchall()
         ):
             conn.execute("update models set display_order = ? where id = ?", (index, row["id"]))
+        conn.execute(
+            """
+            create table if not exists model_usage_bindings (
+                id text primary key,
+                model_id text not null,
+                provider_id text not null,
+                external_model_id text not null,
+                created_at real not null,
+                foreign key(model_id) references models(id) on delete cascade,
+                unique(provider_id, external_model_id)
+            )
+            """
+        )
         self._dedupe_models(conn)
         conn.execute("create unique index if not exists idx_models_normalized_path on models(normalized_path)")
         run_columns = {row["name"] for row in conn.execute("pragma table_info(runs)").fetchall()}
@@ -193,6 +232,11 @@ class Store:
                 conn.execute("update scripts set model_id=? where model_id=?", (primary["id"], duplicate["id"]))
                 conn.execute("update runs set model_id=? where model_id=?", (primary["id"], duplicate["id"]))
                 conn.execute("update benchmark_runs set model_id=? where model_id=?", (primary["id"], duplicate["id"]))
+                conn.execute(
+                    "insert or ignore into model_usage_bindings(id, model_id, provider_id, external_model_id, created_at) select id, ?, provider_id, external_model_id, created_at from model_usage_bindings where model_id=?",
+                    (primary["id"], duplicate["id"]),
+                )
+                conn.execute("delete from model_usage_bindings where model_id=?", (duplicate["id"],))
                 conn.execute("delete from models where id=?", (duplicate["id"],))
             changed = True
 
@@ -223,12 +267,18 @@ class Store:
                 conn.execute("update scripts set model_id = ? where model_id = ?", (canonical, duplicate))
                 conn.execute("update runs set model_id = ? where model_id = ?", (canonical, duplicate))
                 conn.execute("update benchmark_runs set model_id = ? where model_id = ?", (canonical, duplicate))
+                conn.execute(
+                    "insert or ignore into model_usage_bindings(id, model_id, provider_id, external_model_id, created_at) select id, ?, provider_id, external_model_id, created_at from model_usage_bindings where model_id=?",
+                    (canonical, duplicate),
+                )
+                conn.execute("delete from model_usage_bindings where model_id = ?", (duplicate,))
                 conn.execute("delete from models where id = ?", (duplicate,))
 
     def _seed(self, conn: sqlite3.Connection) -> None:
         defaults = {
             "model_dir": str(default_model_dir()),
             "llama_server_path": "",
+            "opencode_db_path": "",
         }
         for key, value in defaults.items():
             conn.execute("insert or ignore into settings(key, value) values(?, ?)", (key, value))

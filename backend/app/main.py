@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .benchmarks import benchmark_manager
-from .config import DEFAULT_HOST, DEFAULT_PORT
+from .config import DEFAULT_HOST, DEFAULT_PORT, default_opencode_db_path
 from .downloads import download_manager
 from .events import event_hub
 from .files import browse_files
@@ -25,6 +25,7 @@ from .scripts import autosuggest_name, estimate_vram_mib, is_fit_managed, parse_
 from .shards import local_model_files, parse_gguf_shard
 from .storage import decode_json_field, new_id, normalize_path, now, store
 from .system import telemetry
+from .usage import UsageUnavailable, save_model_usage_settings, usage_snapshot
 
 
 app = FastAPI(title="LLM Model Loader", version="0.1.0")
@@ -40,6 +41,7 @@ app.add_middleware(
 class SettingsIn(BaseModel):
     llama_server_path: str | None = None
     model_dir: str | None = None
+    opencode_db_path: str | None = None
 
 
 class DownloadIn(BaseModel):
@@ -80,6 +82,21 @@ class BenchmarkIn(BaseModel):
 
 class ModelOrderIn(BaseModel):
     model_ids: list[str]
+
+
+class UsageBindingIn(BaseModel):
+    provider_id: str
+    external_model_id: str
+
+
+class UsageSettingsIn(BaseModel):
+    currency: str | None = None
+    input_per_million: str | None = None
+    cache_read_per_million: str | None = None
+    cache_write_per_million: str | None = None
+    output_per_million: str | None = None
+    reasoning_per_million: str | None = None
+    bindings: list[UsageBindingIn] | None = None
 
 
 def _model_rows() -> list[dict[str, Any]]:
@@ -123,6 +140,7 @@ def get_settings() -> dict[str, str]:
     return {
         "llama_server_path": llama_server_path,
         "model_dir": store.setting("model_dir"),
+        "opencode_db_path": store.setting("opencode_db_path") or str(default_opencode_db_path()),
         "host": DEFAULT_HOST,
         "port": str(DEFAULT_PORT),
     }
@@ -139,6 +157,8 @@ def update_settings(body: SettingsIn) -> dict[str, str]:
     if body.model_dir is not None:
         Path(body.model_dir).mkdir(parents=True, exist_ok=True)
         store.set_setting("model_dir", body.model_dir)
+    if body.opencode_db_path is not None:
+        store.set_setting("opencode_db_path", body.opencode_db_path.strip())
     return get_settings()
 
 
@@ -202,6 +222,36 @@ def resume_download(download_id: str) -> dict[str, Any]:
 @app.get("/api/models")
 def list_models() -> list[dict[str, Any]]:
     return _model_rows()
+
+
+@app.get("/api/usage")
+def get_usage(range: str = "all", model_id: str | None = None, page: int = 0) -> dict[str, Any]:
+    try:
+        configured_path = store.setting("opencode_db_path")
+        return usage_snapshot(range, model_id, page, opencode_path=configured_path or None)
+    except UsageUnavailable as exc:
+        return {
+            "available": False,
+            "range": range,
+            "error": str(exc),
+            "summary": None,
+            "models": [],
+            "recent_task": None,
+            "history": {"items": [], "total": 0, "page": max(0, page), "page_size": 8},
+            "unmapped": [],
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.patch("/api/models/{model_id}/usage-settings")
+def update_model_usage_settings(model_id: str, body: UsageSettingsIn) -> dict[str, Any]:
+    try:
+        payload = body.model_dump(exclude_unset=True)
+        return save_model_usage_settings(model_id, payload)
+    except ValueError as exc:
+        status = 404 if str(exc) == "Model not found." else 400
+        raise HTTPException(status_code=status, detail=str(exc))
 
 
 @app.patch("/api/models/order")
@@ -288,6 +338,7 @@ def delete_model(model_id: str, force: bool = False) -> dict[str, Any]:
                 raise HTTPException(status_code=400, detail="Refusing to delete a file outside the managed model directory.")
         for path in paths:
             path.unlink()
+    store.execute("delete from model_usage_bindings where model_id=?", (model_id,))
     store.execute("delete from models where id=?", (model_id,))
     return {"ok": True}
 

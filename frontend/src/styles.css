@@ -98,7 +98,7 @@ main {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(2, minmax(185px, 1.7fr)) repeat(4, minmax(75px, 1fr));
+  grid-template-columns: minmax(220px, 1.35fr) minmax(220px, 1.35fr) repeat(3, minmax(70px, .65fr)) minmax(320px, 2fr) minmax(70px, .65fr);
   gap: 8px;
 }
 
@@ -120,11 +120,35 @@ main {
 
 .metric b {
   font-size: 13px;
+  white-space: nowrap;
+}
+
+.metric:not(.wide) > svg {
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.metric:not(.wide) > label,
+.metric:not(.wide) > b {
+  grid-column: 2;
 }
 
 .metric.wide b {
   display: block;
   margin-bottom: 4px;
+}
+
+.sessionCostMetric > div {
+  min-width: 0;
+}
+
+.sessionCostMetric small {
+  display: block;
+  overflow: hidden;
+  color: #667386;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .iconButton {
@@ -1084,6 +1108,380 @@ h2 {
   box-shadow: 0 12px 32px rgba(20, 28, 38, 0.22);
 }
 
+.settingsBand {
+  grid-template-columns: 180px minmax(220px, 1.2fr) minmax(190px, 1fr) minmax(220px, 1.1fr) auto auto auto;
+}
+
+.usageBand {
+  min-width: 0;
+}
+
+.usageRange {
+  width: auto;
+  min-width: 82px;
+  min-height: 28px;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+.usageSummary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  margin-bottom: 8px;
+}
+
+.usageSummary > span,
+.usageInlineSummary > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #dbe2ea;
+  border-radius: 6px;
+  background: #f5f8fb;
+}
+
+.usageSummary small,
+.usageInlineSummary small,
+.usageChild small,
+.usageHistoryTask small {
+  color: #6b7584;
+  font-size: 11px;
+}
+
+.usageSummary strong,
+.usageInlineSummary strong {
+  color: #25364a;
+  font-size: 14px;
+}
+
+.usageBreakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 7px 0;
+}
+
+.usageChip {
+  display: grid;
+  gap: 1px;
+  min-width: 70px;
+  padding: 4px 7px;
+  border: 1px solid #dbe2ea;
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+.usageChip small {
+  color: #6b7584;
+  font-size: 10px;
+}
+
+.usageChip strong {
+  color: #344154;
+  font-size: 12px;
+}
+
+.usageFlags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 6px 0;
+}
+
+.usageMissing,
+.usageHelp {
+  color: #7a641f;
+  font-size: 11px;
+}
+
+.usageTask,
+.usageHistory,
+.usageUnmapped,
+.modelUsage {
+  border-top: 1px solid #dbe2ea;
+  margin-top: 8px;
+  padding-top: 7px;
+}
+
+.usageTask summary,
+.usageHistory summary,
+.usageUnmapped summary,
+.modelUsage summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  color: #244760;
+  font-weight: 600;
+}
+
+.usageTask summary::-webkit-details-marker,
+.usageHistory summary::-webkit-details-marker,
+.usageUnmapped summary::-webkit-details-marker,
+.modelUsage summary::-webkit-details-marker {
+  display: none;
+}
+
+.usageTaskChevron,
+.usageHistoryChevron,
+.modelUsageChevron {
+  flex: 0 0 auto;
+  transition: transform 150ms ease;
+}
+
+.usageTask[open] .usageTaskChevron,
+.usageHistory[open] .usageHistoryChevron,
+.modelUsage[open] .modelUsageChevron {
+  transform: rotate(90deg);
+}
+
+.usageTask summary > span {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.usageTask summary > span strong,
+.usageTask summary > span small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usageTask summary > b {
+  flex: 0 0 auto;
+  color: #25364a;
+}
+
+.usageTaskBody {
+  margin: 7px 0 0 18px;
+}
+
+.usageTaskTotals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: #667386;
+  font-size: 12px;
+}
+
+.usageTaskTotals strong {
+  color: #25364a;
+}
+
+.usageChildren {
+  display: grid;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.usageChild {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid #dbe2ea;
+  border-radius: 5px;
+  background: #ffffff;
+}
+
+.usageChild > span {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.usageChild strong,
+.usageChild small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usageChild > b {
+  flex: 0 0 auto;
+  color: #25364a;
+}
+
+.usageTable {
+  margin-top: 7px;
+}
+
+.usageTable .thead,
+.usageTable .row {
+  grid-template-columns: 106px minmax(130px, 1.8fr) 62px 72px 72px 80px;
+}
+
+.usageHistoryTask {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.usageHistoryTask strong,
+.usageHistoryTask small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usageSummaryHint {
+  margin-left: auto;
+  color: #6b7584;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.usageUnmapped .bindingList {
+  margin-top: 7px;
+}
+
+.unmappedList {
+  display: grid;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.unmappedRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, .75fr);
+  gap: 6px;
+  align-items: center;
+}
+
+.unmappedRow select {
+  min-height: 28px;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+.modelUsage {
+  margin: 0;
+  padding: 0 10px 8px 44px;
+  border-top: 1px solid #d8e5ee;
+  background: #f8fbfd;
+}
+
+.modelUsage summary {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.modelUsageBody {
+  margin-top: 7px;
+}
+
+.usageInlineSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.usageInlineSummary strong {
+  font-size: 12px;
+}
+
+.usagePricingGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.usagePricingGrid label {
+  display: grid;
+  gap: 3px;
+  color: #667386;
+  font-size: 11px;
+}
+
+.usagePricingGrid input {
+  min-height: 29px;
+  padding: 5px 7px;
+  font-size: 12px;
+}
+
+.usageSubheading {
+  margin-bottom: 5px;
+  color: #526175;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.bindingList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.bindingPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  padding: 3px 5px 3px 7px;
+  border: 1px solid #c8d9e5;
+  border-radius: 999px;
+  background: #eef6fb;
+  color: #31556d;
+  font-size: 11px;
+}
+
+.bindingPill.unmapped {
+  background: #fff8e6;
+  border-color: #e5cf95;
+  color: #7a641f;
+}
+
+.bindingPill button {
+  width: 18px;
+  min-height: 18px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: inherit;
+  justify-content: center;
+}
+
+.bindingEditor {
+  display: grid;
+  grid-template-columns: minmax(100px, .8fr) minmax(150px, 1.2fr) auto;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.bindingEditor input {
+  min-height: 29px;
+  padding: 5px 7px;
+  font-size: 12px;
+}
+
+.bindingEditor button {
+  min-height: 29px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.usageEditorFoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  color: #6b7584;
+  font-size: 11px;
+}
+
+.usageEditorFoot .primary {
+  margin-left: auto;
+}
+
 @media (max-width: 1100px) {
   .topbar {
     grid-template-columns: 1fr 34px;
@@ -1093,6 +1491,9 @@ h2 {
   }
   .metrics, .grid.two, .settingsBand {
     grid-template-columns: 1fr;
+  }
+  .usageSummary, .usageInlineSummary, .usagePricingGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1111,6 +1512,22 @@ h2 {
   }
   .row, .repoGrid, .fileGrid, .downloadGrid, .benchGrid {
     grid-template-columns: 1fr;
+  }
+  .usageSummary, .usageInlineSummary, .usagePricingGrid, .bindingEditor {
+    grid-template-columns: 1fr;
+  }
+  .unmappedRow {
+    grid-template-columns: 1fr;
+  }
+  .usageTable .thead {
+    display: none;
+  }
+  .usageTable .row {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+  .usageTable .row > span::before {
+    content: "";
   }
   .fileGrid {
     margin-left: 0;
