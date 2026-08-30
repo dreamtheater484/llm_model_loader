@@ -110,6 +110,20 @@ function formatTokenRate(value) {
   return rate.toFixed(rate >= 100 ? 0 : 1);
 }
 
+function formatPower(value) {
+  const watts = Number(value);
+  if (!Number.isFinite(watts)) return "—";
+  return `${watts.toFixed(watts >= 100 ? 0 : 1)} W`;
+}
+
+function formatEnergy(value, historical = false) {
+  const kwh = Number(value);
+  if (!Number.isFinite(kwh)) return "—";
+  if (historical && kwh >= 1000) return `${(kwh / 1000).toFixed(kwh >= 10_000 ? 1 : 2)} MWh`;
+  const digits = kwh < 0.1 ? 4 : kwh < 10 ? 3 : kwh < 100 ? 2 : 1;
+  return `${kwh.toFixed(digits)} kWh`;
+}
+
 function formatCost(value, currency = "USD") {
   if (value == null || value === "") return "—";
   const amount = Number(value);
@@ -184,72 +198,102 @@ function TopTelemetry({ telemetry, usage, refresh }) {
       : "—";
   const cacheCategoryMissing = sessionUsage?.missing_rates?.includes("cache_read") || sessionUsage?.missing_rates?.includes("cache_write");
   const tokenSpeed = telemetry?.token_speed;
+  const power = telemetry?.power;
   const speedLine = (scope) => `Prep ${formatTokenRate(tokenSpeed?.preprocessing?.[scope])} · Decode ${formatTokenRate(tokenSpeed?.decode?.[scope])}`;
   return (
     <header className="topbar">
       <div className="brand">
-        <Boxes size={18} />
+        <span className="brandMark"><Boxes size={19} /></span>
         <div>
           <strong>LLM Model Loader</strong>
           <span>llama.cpp control surface</span>
         </div>
       </div>
-      <div className="metrics">
-        <div className="metric wide">
-          <HardDrive size={15} />
-          <div>
-            <label>{gpu?.name || "No NVIDIA GPU detected"}</label>
-            <b>{gpu ? `${formatMib(gpu.memory_free_mib)} free / ${formatMib(gpu.memory_total_mib)}` : "Unavailable"}</b>
-            <Progress value={used} />
+      <div className="telemetryGroups">
+        <section className="telemetryGroup systemTelemetry">
+          <div className="telemetryGroupLabel"><i />System</div>
+          <div className="systemMetrics">
+            <div className="dashboardMetric memoryMetric">
+              <span className="metricIcon memoryGpu"><HardDrive size={15} /></span>
+              <div>
+                <label>{gpu?.name || "No NVIDIA GPU detected"}</label>
+                <b>{gpu ? `${formatMib(gpu.memory_free_mib)} free / ${formatMib(gpu.memory_total_mib)}` : "Unavailable"}</b>
+                <Progress value={used} />
+              </div>
+            </div>
+            <div className="dashboardMetric memoryMetric">
+              <span className="metricIcon memoryRam"><MemoryStick size={15} /></span>
+              <div>
+                <label>{memoryDetails}</label>
+                <b>{memoryTotal == null ? "Unavailable" : `${formatBytes(memoryUsed)} used / ${formatBytes(memoryTotal)}`}</b>
+                <Progress value={memoryPercent} />
+              </div>
+            </div>
+            <div className="dashboardMetric compactMetric">
+              <span className="metricIcon computeUtil"><Gauge size={15} /></span>
+              <div><label>Util</label><b>{gpu?.utilization_gpu_percent ?? 0}%</b></div>
+            </div>
+            <div className="dashboardMetric compactMetric">
+              <span className="metricIcon computeCpu"><Cpu size={15} /></span>
+              <div><label>CPU</label><b>{telemetry?.cpu_load_percent == null ? "n/a" : `${telemetry.cpu_load_percent.toFixed(0)}%`}</b></div>
+            </div>
           </div>
-        </div>
-        <div className="metric wide">
-          <MemoryStick size={15} />
-          <div>
-            <label>{memoryDetails}</label>
-            <b>{memoryTotal == null ? "Unavailable" : `${formatBytes(memoryUsed)} used / ${formatBytes(memoryTotal)}`}</b>
-            <Progress value={memoryPercent} />
+        </section>
+        <section className="telemetryGroup powerTelemetry">
+          <div className="telemetryGroupLabel powerGroupLabel"><i />Power</div>
+          <button className="powerSummary" type="button" aria-describedby="power-breakdown">
+            <span className="metricIcon powerIcon"><Zap size={15} /></span>
+            <span className="powerStat powerCurrent">
+              <label>Current</label>
+              <b>{formatPower(power?.current_system_w)}</b>
+            </span>
+            <span className="powerStat">
+              <label>Session</label>
+              <b>{formatEnergy(power?.session_kwh)}</b>
+            </span>
+            <span className="powerStat">
+              <label>All time</label>
+              <b>{formatEnergy(power?.total_ever_kwh, true)}</b>
+            </span>
+          </button>
+          <div className="powerPopover" id="power-breakdown" role="tooltip">
+            <strong>Estimated system power</strong>
+            <span><em>GPU board · measured</em><b>{formatPower(power?.gpu_w)}</b></span>
+            <span><em>CPU package · measured</em><b>{formatPower(power?.cpu_w)}</b></span>
+            <span><em>Platform · estimated</em><b>{formatPower(power?.platform_overhead_w)}</b></span>
+            <span><em>PSU efficiency</em><b>{power?.psu_efficiency ? `${Math.round(power.psu_efficiency * 100)}%` : "—"}</b></span>
+            <span className="powerPopoverTotal"><em>Current wall estimate</em><b>{formatPower(power?.current_system_w)}</b></span>
+            <small>Session starts with the backend. All-time energy is recorded from when power tracking was enabled.</small>
           </div>
-        </div>
-        <div className="metric">
-          <Zap size={15} />
-          <label>GPU</label>
-          <b>{gpu?.power_draw_w ? `${gpu.power_draw_w.toFixed(1)} W` : "n/a"}</b>
-        </div>
-        <div className="metric">
-          <Gauge size={15} />
-          <label>Util</label>
-          <b>{gpu?.utilization_gpu_percent ?? 0}%</b>
-        </div>
-        <div className="metric">
-          <Cpu size={15} />
-          <label>CPU</label>
-          <b>{telemetry?.cpu_load_percent == null ? "n/a" : `${telemetry.cpu_load_percent.toFixed(0)}%`}</b>
-        </div>
-        <div className="metric">
-          <Activity size={15} />
-          <label>Models</label>
-          <b>{telemetry?.loaded_models || 0} live / {telemetry?.loading_models || 0} loading</b>
-        </div>
-        <div className="metric wide sessionCostMetric" title={usage?.recent_task?.title || "Most recently updated OpenCode task"}>
-          <CircleDollarSign size={15} />
-          <div>
-            <label>Session cost</label>
-            <b>{sessionTotal}</b>
-            <small>{sessionUsage ? `in ${sessionCost(sessionCosts.input, "input")} · out ${sessionCost(sessionCosts.output, "output")} · cache ${cacheCategoryMissing ? "—" : `${sessionUsage.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? sessionCosts.cache || "0" : formatCost(sessionCosts.cache, sessionCurrency)}`}` : "No OpenCode session"}</small>
+        </section>
+        <section className="telemetryGroup sessionTelemetry">
+          <div className="telemetryGroupLabel sessionGroupLabel"><i />Runtime &amp; Session</div>
+          <div className="sessionMetrics">
+            <div className="modelMetric">
+              <label>Models</label>
+              <b><i />{telemetry?.loaded_models || 0} live / {telemetry?.loading_models || 0} loading</b>
+            </div>
+            <div className="dashboardMetric sessionCostMetric" title={usage?.recent_task?.title || "Most recently updated OpenCode task"}>
+              <span className="metricIcon sessionCostIcon"><CircleDollarSign size={15} /></span>
+              <div>
+                <label>Session cost</label>
+                <b>{sessionTotal}</b>
+                <small>{sessionUsage ? `in ${sessionCost(sessionCosts.input, "input")} · out ${sessionCost(sessionCosts.output, "output")} · cache ${cacheCategoryMissing ? "—" : `${sessionUsage.cost_status === "partially_priced" ? "~" : ""}${mixedCurrencies ? sessionCosts.cache || "0" : formatCost(sessionCosts.cache, sessionCurrency)}`}` : "No OpenCode session"}</small>
+              </div>
+            </div>
+            <div
+              className="dashboardMetric speedMetric"
+              title="Current is the latest runtime sample. Session average is weighted from server start. Preprocessing excludes cached prompt tokens."
+            >
+              <span className="metricIcon speedIcon"><Timer size={15} /></span>
+              <div>
+                <label>Token speed · tok/s</label>
+                <b><span>Current</span>{speedLine("current_tps")}</b>
+                <small><span>Session avg</span>{speedLine("session_average_tps")}</small>
+              </div>
+            </div>
           </div>
-        </div>
-        <div
-          className="metric wide speedMetric"
-          title="Current is the latest runtime sample. Session average is weighted from server start. Preprocessing excludes cached prompt tokens."
-        >
-          <Timer size={15} />
-          <div>
-            <label>Token speed · tok/s</label>
-            <b><span>Current</span>{speedLine("current_tps")}</b>
-            <small><span>Session avg</span>{speedLine("session_average_tps")}</small>
-          </div>
-        </div>
+        </section>
       </div>
       <IconButton icon={RefreshCw} label="Refresh telemetry" onClick={refresh} />
     </header>

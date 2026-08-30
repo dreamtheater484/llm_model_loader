@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from functools import lru_cache
@@ -18,6 +19,10 @@ from .gpu import query_gpus
 
 _last_cpu_times: tuple[float, float] | None = None
 _runtime_speed_cache: dict[str, dict[str, float]] = {}
+
+_POWER_PLATFORM_OVERHEAD_W = 35.0
+_POWER_PSU_EFFICIENCY = 0.90
+_MAX_POWER_SAMPLE_INTERVAL_SECONDS = 15.0
 
 _SMBIOS_MEMORY_TYPES = {
     20: "DDR",
@@ -72,6 +77,64 @@ def _fallback_memory() -> tuple[int | None, int | None]:
         return int(status.total_physical), int(status.available_physical)
     except (AttributeError, OSError):
         return None, None
+
+
+def cpu_package_power_w() -> float | None:
+    if sys.platform != "win32":
+        return None
+    command = r"""
+$samples = (Get-Counter '\Energy Meter(*)\Power' -ErrorAction Stop).CounterSamples
+$package = @($samples | Where-Object { $_.InstanceName -match '(?i)package\d+_(pkg|package)$' })
+if (-not $package) {
+    $package = @($samples | Where-Object { $_.InstanceName -match '(?i)^(cpu power|current socket power|socket power)$' })
+}
+if (-not $package) { exit 1 }
+$milliwatts = ($package | Measure-Object -Property CookedValue -Sum).Sum
+[Console]::WriteLine(($milliwatts / 1000).ToString([Globalization.CultureInfo]::InvariantCulture))
+""".strip()
+    try:
+        completed = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        completed.check_returncode()
+        value = float(completed.stdout.strip())
+    except (FileNotFoundError, subprocess.SubprocessError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+class PowerTracker:
+    def __init__(
+        self,
+        total_ever_wh: float = 0.0,
+        save_total_ever_wh: Any | None = None,
+    ) -> None:
+        self.session_wh = 0.0
+        self.total_ever_wh = max(0.0, total_ever_wh)
+        self._save_total_ever_wh = save_total_ever_wh
+        self._last_timestamp: float | None = None
+        self._last_power_w: float | None = None
+        self._lock = threading.Lock()
+
+    def sample(self, power_w: float | None, timestamp: float) -> dict[str, float]:
+        with self._lock:
+            if power_w is not None and self._last_timestamp is not None and self._last_power_w is not None:
+                elapsed = timestamp - self._last_timestamp
+                if 0 < elapsed <= _MAX_POWER_SAMPLE_INTERVAL_SECONDS:
+                    added_wh = ((self._last_power_w + power_w) / 2) * elapsed / 3600
+                    self.session_wh += added_wh
+                    self.total_ever_wh += added_wh
+                    if self._save_total_ever_wh:
+                        self._save_total_ever_wh(self.total_ever_wh)
+            self._last_timestamp = timestamp
+            self._last_power_w = power_w
+            return {
+                "session_kwh": self.session_wh / 1000,
+                "total_ever_kwh": self.total_ever_wh / 1000,
+            }
 
 
 @lru_cache(maxsize=1)
@@ -216,7 +279,9 @@ def telemetry(
     loaded_count: int = 0,
     loading_count: int = 0,
     endpoints: list[tuple[str, int]] | None = None,
+    power_tracker: PowerTracker | None = None,
 ) -> dict[str, Any]:
+    timestamp = time.time()
     memory_hardware = _memory_hardware()
     if psutil:
         cpu_percent = float(psutil.cpu_percent(interval=None))
@@ -226,13 +291,34 @@ def telemetry(
     else:
         cpu_percent = _fallback_cpu_percent()
         memory_total_bytes, memory_available_bytes = _fallback_memory()
+    gpus = query_gpus()
+    gpu_power_values = [gpu["power_draw_w"] for gpu in gpus if gpu.get("power_draw_w") is not None]
+    gpu_power_w = sum(gpu_power_values) if gpu_power_values else None
+    cpu_power_w = cpu_package_power_w()
+    estimated_system_power_w = None
+    if gpu_power_w is not None and cpu_power_w is not None:
+        estimated_system_power_w = (gpu_power_w + cpu_power_w + _POWER_PLATFORM_OVERHEAD_W) / _POWER_PSU_EFFICIENCY
+    energy = power_tracker.sample(estimated_system_power_w, timestamp) if power_tracker else {
+        "session_kwh": 0.0,
+        "total_ever_kwh": 0.0,
+    }
     return {
-        "timestamp": time.time(),
-        "gpus": query_gpus(),
+        "timestamp": timestamp,
+        "gpus": gpus,
         "loaded_models": loaded_count,
         "loading_models": loading_count,
         "cpu_load_percent": cpu_percent,
-        "cpu_power_w": None,
+        "cpu_power_w": cpu_power_w,
+        "power": {
+            "current_system_w": estimated_system_power_w,
+            "gpu_w": gpu_power_w,
+            "cpu_w": cpu_power_w,
+            "platform_overhead_w": _POWER_PLATFORM_OVERHEAD_W,
+            "psu_efficiency": _POWER_PSU_EFFICIENCY,
+            "session_kwh": energy["session_kwh"],
+            "total_ever_kwh": energy["total_ever_kwh"],
+            "estimated": True,
+        },
         "memory_total_bytes": memory_total_bytes,
         "memory_available_bytes": memory_available_bytes,
         "memory_used_bytes": memory_total_bytes - memory_available_bytes if memory_total_bytes is not None else None,

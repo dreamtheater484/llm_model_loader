@@ -24,7 +24,7 @@ from .runs import run_manager
 from .scripts import autosuggest_name, estimate_vram_mib, is_fit_managed, parse_script
 from .shards import local_model_files, parse_gguf_shard
 from .storage import decode_json_field, new_id, normalize_path, now, store
-from .system import telemetry
+from .system import PowerTracker, telemetry
 from .usage import UsageUnavailable, save_model_usage_settings, usage_snapshot
 
 
@@ -35,6 +35,19 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+
+def _stored_power_total_wh() -> float:
+    try:
+        return float(store.setting("power_total_ever_wh") or 0)
+    except ValueError:
+        return 0.0
+
+
+power_tracker = PowerTracker(
+    total_ever_wh=_stored_power_total_wh(),
+    save_total_ever_wh=lambda value: store.set_setting("power_total_ever_wh", f"{value:.9f}"),
 )
 
 
@@ -170,7 +183,7 @@ def gpus() -> list[dict[str, Any]]:
 @app.get("/api/system/telemetry")
 def system_telemetry() -> dict[str, Any]:
     loaded, loading = run_manager.active_counts()
-    return telemetry(loaded, loading, run_manager.active_endpoints())
+    return telemetry(loaded, loading, run_manager.active_endpoints(), power_tracker)
 
 
 @app.get("/api/hf/search")

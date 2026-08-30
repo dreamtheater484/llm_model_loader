@@ -18,6 +18,7 @@ class SystemTelemetryTests(unittest.TestCase):
         with (
             patch.object(system, "psutil", fake_psutil),
             patch.object(system, "query_gpus", return_value=[]),
+            patch.object(system, "cpu_package_power_w", return_value=None),
             patch.object(system, "_memory_hardware", return_value={"type": "DDR5", "speed_mts": 6000}),
         ):
             result = system.telemetry()
@@ -32,6 +33,7 @@ class SystemTelemetryTests(unittest.TestCase):
         with (
             patch.object(system, "psutil", None),
             patch.object(system, "query_gpus", return_value=[]),
+            patch.object(system, "cpu_package_power_w", return_value=None),
             patch.object(system, "_memory_hardware", return_value={"type": None, "speed_mts": None}),
             patch.object(system, "_fallback_memory", return_value=(16_000, 4_000)),
         ):
@@ -40,6 +42,55 @@ class SystemTelemetryTests(unittest.TestCase):
         self.assertEqual(result["memory_total_bytes"], 16_000)
         self.assertEqual(result["memory_available_bytes"], 4_000)
         self.assertEqual(result["memory_used_bytes"], 12_000)
+
+    @patch.object(system.sys, "platform", "win32")
+    @patch.object(system.subprocess, "run")
+    def test_cpu_package_power_reads_windows_energy_meter(self, run):
+        run.return_value = SimpleNamespace(
+            stdout="45.75\n",
+            check_returncode=lambda: None,
+        )
+
+        self.assertEqual(system.cpu_package_power_w(), 45.75)
+
+    def test_power_tracker_integrates_session_and_lifetime_energy(self):
+        saved = []
+        tracker = system.PowerTracker(total_ever_wh=2000, save_total_ever_wh=saved.append)
+
+        first = tracker.sample(300, 100)
+        second = tracker.sample(300, 110)
+
+        self.assertEqual(first, {"session_kwh": 0.0, "total_ever_kwh": 2.0})
+        self.assertAlmostEqual(second["session_kwh"], 300 * 10 / 3_600_000)
+        self.assertAlmostEqual(second["total_ever_kwh"], 2 + second["session_kwh"])
+        self.assertAlmostEqual(saved[-1], 2000 + (300 * 10 / 3600))
+
+    def test_power_tracker_does_not_fill_long_sampling_gaps(self):
+        tracker = system.PowerTracker()
+        tracker.sample(300, 100)
+
+        result = tracker.sample(300, 120)
+
+        self.assertEqual(result["session_kwh"], 0)
+
+    def test_telemetry_reports_estimated_system_power_breakdown(self):
+        fake_psutil = SimpleNamespace(
+            cpu_percent=lambda interval=None: 12.5,
+            virtual_memory=lambda: SimpleNamespace(total=32_000, available=9_000),
+        )
+        tracker = system.PowerTracker()
+        with (
+            patch.object(system, "psutil", fake_psutil),
+            patch.object(system, "query_gpus", return_value=[{"power_draw_w": 225.0}]),
+            patch.object(system, "cpu_package_power_w", return_value=45.0),
+            patch.object(system, "_memory_hardware", return_value={"type": "DDR5", "speed_mts": 6000}),
+        ):
+            result = system.telemetry(power_tracker=tracker)
+
+        self.assertEqual(result["power"]["gpu_w"], 225.0)
+        self.assertEqual(result["power"]["cpu_w"], 45.0)
+        self.assertAlmostEqual(result["power"]["current_system_w"], (225 + 45 + 35) / 0.9)
+        self.assertEqual(result["power"]["session_kwh"], 0.0)
 
     @patch.object(system.sys, "platform", "win32")
     @patch.object(system.subprocess, "run")
