@@ -23,10 +23,10 @@ FACTS = {
     "model_size_bytes": 21492695040,
     "model_sha256": "bb3360522a06e136e0367f5703414d26272b7285c8a6ab6194135c17dbd81b32",
     "runtime_revision": "5d2c1f5590b8f4c3d106a75f65210eb4efb8f4e1",
-    "port": 8081,
-    "concurrency": 3,
-    "max_context": 262144,
-    "min_context": 163840,
+    "port": 8094,
+    "concurrency": 2,
+    "max_context": 252928,
+    "kv_capacity": "auto",
 }
 
 
@@ -34,20 +34,18 @@ class NInferSetupTests(unittest.TestCase):
     def test_preset_script_shape(self):
         raw = preset_script(FACTS)
         self.assertIn('& wsl.exe -d "Ubuntu" -- bash -lc', raw)
-        self.assertIn("NINFER_PORT=8081", raw)
-        self.assertIn("NINFER_CONCURRENCY=3", raw)
-        self.assertIn("NINFER_MIN_CONTEXT=163840", raw)
+        self.assertIn("NINFER_PORT=8094", raw)
+        self.assertIn("NINFER_CONCURRENCY=2", raw)
+        self.assertIn("NINFER_MAX_CONTEXT=252928", raw)
+        self.assertIn("NINFER_KV_CAPACITY=auto", raw)
         self.assertIn("NINFER_MODEL_FILE=qwen3_8_27b_nvfp4.ninfer", raw)
-        # The preset must NOT pin NINFER_MAX_CONTEXT: the launcher only runs its
-        # startup ladder when that variable is unset.
-        self.assertNotIn("NINFER_MAX_CONTEXT=", raw)
         self.assertIn("run-qwen38-nvfp4.sh --model-id qwen3.8-27b", raw)
         parsed = parse_script(raw)
         self.assertEqual(parsed.runtime, "ninfer")
         self.assertEqual(parsed.wsl_distro, "Ubuntu")
-        self.assertEqual(parsed.port, 8081)
-        self.assertEqual(parsed.ctx_size, 163840)
-        self.assertEqual(parsed.concurrency, 3)
+        self.assertEqual(parsed.port, 8094)
+        self.assertEqual(parsed.ctx_size, 252928)
+        self.assertEqual(parsed.concurrency, 2)
         self.assertEqual(parsed.model_ref, "qwen3.8-27b")
         self.assertEqual(parsed.quantization, "NVFP4")
 
@@ -95,7 +93,7 @@ class NInferSetupTests(unittest.TestCase):
             parsed = parse_script(script["raw_script"])
             self.assertEqual(parsed.runtime, "ninfer")
             self.assertEqual(parsed.wsl_distro, "Ubuntu")
-            self.assertEqual(parsed.ctx_size, 163840)
+            self.assertEqual(parsed.ctx_size, 252928)
             self.assertEqual(parsed.quantization, "NVFP4")
             del db
             gc.collect()
@@ -111,6 +109,23 @@ class NInferSetupTests(unittest.TestCase):
             script = db.row("select * from scripts")
             self.assertEqual(script["id"], second["script_id"])
             self.assertIn("run-qwen38-v2.sh", script["raw_script"])
+            del db
+            gc.collect()
+
+    def test_registration_migrates_previous_profile_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Store(Path(directory) / "loader.sqlite3")
+            first = register_ninfer_model(FACTS, db)
+            db.execute(
+                "update scripts set name=? where id=?",
+                ("Qwen3.8-27B-NVFP4 (NInfer) / MTP3 / FP8 KV / C2 / 120k each", first["script_id"]),
+            )
+
+            second = register_ninfer_model(FACTS, db)
+
+            self.assertEqual(second["script_id"], first["script_id"])
+            self.assertEqual(db.row("select count(*) as n from scripts")["n"], 1)
+            self.assertEqual(db.row("select name from scripts")["name"], PRESET_NAME)
             del db
             gc.collect()
 

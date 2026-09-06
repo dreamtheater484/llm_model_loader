@@ -13,7 +13,13 @@ from .scripts import detect_quantization, parse_script
 from .storage import Store, new_id, normalize_path, now, store
 
 
-PRESET_NAME = "Qwen3.8-27B-NVFP4 (NInfer) / Vision / MTP3 / INT8 KV / C3 / 160kctx+"
+PRESET_NAME = "Qwen3.8-27B-NVFP4 (NInfer) / Vision / MTP4 / FP8 KV / C2 / 252928ctx"
+LEGACY_PRESET_NAMES = (
+    "Qwen3.8-27B-NVFP4 (NInfer) / Vision / MTP3 / FP8 KV / C2 / 120k each",
+    "Qwen3.8-27B-NVFP4 (NInfer) / MTP3 / FP8 KV / C2 / 120k each",
+    "Qwen3.8-27B-NVFP4 (NInfer) / Vision / MTP3 / FP8 KV / C1 / 240k each",
+    "Qwen3.8-27B-NVFP4 (NInfer) / Vision / MTP3 / INT8 KV / C3 / 160kctx+",
+)
 PRESET_VRAM_MIB = 30720
 MODEL_NAME = "Qwen3.8-27B-NVFP4"
 MODEL_REPO = "neroued/Qwen3.8-27B-nvfp4-NInfer"
@@ -48,18 +54,17 @@ def model_unc_path(info: dict[str, Any]) -> str:
 def preset_script(info: dict[str, Any]) -> str:
     distro = info["distro"]
     launcher = info["launcher_path"]
-    port = int(info.get("port") or 8080)
-    concurrency = int(info.get("concurrency") or 3)
-    min_context = int(info.get("min_context") or 163840)
+    port = int(info.get("port") or 8094)
+    concurrency = int(info.get("concurrency") or 2)
+    max_context = int(info.get("max_context") or 252928)
+    kv_capacity = str(info.get("kv_capacity") or "auto")
     model_file = Path(info["model_path"]).name
-    # NOTE: NINFER_MAX_CONTEXT is deliberately NOT pinned here. The launcher
-    # only runs its startup ladder (262144 -> MIN_CONTEXT) when NINFER_MAX_CONTEXT
-    # is unset; pinning it would collapse the ladder to a single attempt.
     env = " ".join(
         [
             f"NINFER_PORT={port}",
             f"NINFER_CONCURRENCY={concurrency}",
-            f"NINFER_MIN_CONTEXT={min_context}",
+            f"NINFER_MAX_CONTEXT={max_context}",
+            f"NINFER_KV_CAPACITY={kv_capacity}",
             f"NINFER_MODEL_FILE={model_file}",
         ]
     )
@@ -104,6 +109,14 @@ def register_ninfer_model(info: dict[str, Any], target_store: Store = store) -> 
         (model_id, PRESET_NAME),
     )
     if not script:
+        for legacy_name in LEGACY_PRESET_NAMES:
+            script = target_store.row(
+                "select id, raw_script from scripts where model_id=? and name=?",
+                (model_id, legacy_name),
+            )
+            if script:
+                break
+    if not script:
         script_id = new_id("script")
         timestamp = now()
         target_store.execute(
@@ -119,9 +132,23 @@ def register_ninfer_model(info: dict[str, Any], target_store: Store = store) -> 
         script_id = script["id"]
         if script["raw_script"] != raw_script:
             target_store.execute(
-                "update scripts set raw_script=?, parsed_json=?, updated_at=? where id=?",
-                (raw_script, json.dumps(parsed), now(), script_id),
+                "update scripts set name=?, raw_script=?, parsed_json=?, updated_at=? where id=?",
+                (PRESET_NAME, raw_script, json.dumps(parsed), now(), script_id),
             )
+        else:
+            target_store.execute("update scripts set name=? where id=?", (PRESET_NAME, script_id))
+    for legacy_name in LEGACY_PRESET_NAMES:
+        for legacy in target_store.rows(
+            "select id from scripts where model_id=? and name=?",
+            (model_id, legacy_name),
+        ):
+            legacy_id = legacy["id"]
+            run_count = target_store.row("select count(*) as n from runs where script_id=?", (legacy_id,))["n"]
+            benchmark_count = target_store.row(
+                "select count(*) as n from benchmark_runs where script_id=?", (legacy_id,)
+            )["n"]
+            if not run_count and not benchmark_count:
+                target_store.execute("delete from scripts where id=?", (legacy_id,))
     return {
         "model_id": model_id,
         "script_id": script_id,

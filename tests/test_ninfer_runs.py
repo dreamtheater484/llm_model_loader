@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from backend.app.runs import RunManager
 
-NINFER_RAW = """& wsl.exe -d "Ubuntu-24.04" -- bash -lc 'NINFER_PORT=8081 NINFER_CONCURRENCY=3 NINFER_MAX_CONTEXT=262144 NINFER_MIN_CONTEXT=163840 NINFER_MODEL_FILE=qwen3_8_27b_nvfp4.ninfer ~/ninfer-qwen38/run-qwen38-nvfp4.sh --model-id qwen3.8-27b'"""
+NINFER_RAW = """& wsl.exe -d "Ubuntu-24.04" -- bash -lc 'NINFER_PORT=8094 NINFER_CONCURRENCY=2 NINFER_MAX_CONTEXT=252928 NINFER_KV_CAPACITY=auto NINFER_MODEL_FILE=qwen3_8_27b_nvfp4.ninfer ~/ninfer-qwen38/run-qwen38-nvfp4.sh --model-id qwen3.8-27b'"""
 
 
 class NInferRunTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class NInferRunTests(unittest.TestCase):
 
         self.assertEqual(plan["llama_server"], r"C:\Windows\System32\wsl.exe")
         self.assertEqual(plan["host"], "127.0.0.1")
-        self.assertEqual(plan["port"], 8081)
+        self.assertEqual(plan["port"], 8094)
         self.assertIn("auto-sizes", plan["vram_reason"])
         self.assertEqual(plan["args"][0], r"C:\Windows\System32\wsl.exe")
         self.assertIn("-d", plan["args"])

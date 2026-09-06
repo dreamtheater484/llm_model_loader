@@ -53,6 +53,26 @@ import "./styles.css";
 
 const API = "";
 
+const DASHBOARD_SECTION_IDS = ["import", "downloads", "usage", "runs", "benchmarks"];
+const DASHBOARD_LAYOUT_KEY = "llm-model-loader.dashboard-layout.v1";
+
+function loadDashboardLayout() {
+  const fallback = { order: DASHBOARD_SECTION_IDS, collapsed: [] };
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(DASHBOARD_LAYOUT_KEY));
+    const savedOrder = Array.isArray(saved?.order)
+      ? saved.order.filter((id) => DASHBOARD_SECTION_IDS.includes(id))
+      : [];
+    const order = [...new Set([...savedOrder, ...DASHBOARD_SECTION_IDS])];
+    const collapsed = Array.isArray(saved?.collapsed)
+      ? saved.collapsed.filter((id) => DASHBOARD_SECTION_IDS.includes(id))
+      : [];
+    return { order, collapsed };
+  } catch {
+    return fallback;
+  }
+}
+
 async function request(path, options = {}) {
   const response = await fetch(`${API}${path}`, {
     ...options,
@@ -886,6 +906,109 @@ function SavedScript({ model, script, start, removeScript, toggleFavorite, reloa
   );
 }
 
+function FavoriteScriptEditorModal({ item, onClose, reload, toast }) {
+  const { model, script } = item;
+  const [name, setName] = useState(script.name || "");
+  const [raw, setRaw] = useState(script.raw_script || "");
+  const [estimate, setEstimate] = useState(script.estimated_vram_mib ? String(script.estimated_vram_mib) : "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    function closeOnEscape(event) {
+      if (event.key === "Escape" && !saving) onClose();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, saving]);
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    try {
+      await request(`/api/models/${model.id}/scripts/${script.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: name || null,
+          raw_script: raw,
+          estimated_vram_mib: estimate ? Number(estimate) : null
+        })
+      });
+      await reload();
+      toast("Script updated");
+      onClose();
+    } catch (error) {
+      toast(error.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="scriptModalBackdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && !saving && onClose()}>
+      <form className="scriptModal" role="dialog" aria-modal="true" aria-labelledby="favoriteScriptEditorTitle" onSubmit={save}>
+        <div className="scriptModalHeader">
+          <div>
+            <h2 id="favoriteScriptEditorTitle">Edit favourite script</h2>
+            <span>{model.name}</span>
+          </div>
+          <IconButton icon={X} label="Close script editor" type="button" onClick={onClose} disabled={saving} />
+        </div>
+        <label>Script name<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional script name, otherwise autosuggested" /></label>
+        <label>Loading script<textarea value={raw} onChange={(event) => setRaw(event.target.value)} /></label>
+        <div className="scriptModalFooter">
+          <label>Optional VRAM estimate MiB<input value={estimate} onChange={(event) => setEstimate(event.target.value)} /></label>
+          <button className="subtle" type="button" onClick={onClose} disabled={saving}><X size={14} /> Cancel</button>
+          <button className="primary" type="submit" disabled={!raw || saving}><Save size={14} /> {saving ? "Saving" : "Save changes"}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function SortableFavoriteScript({ item, onStart, onEdit }) {
+  const { model, script } = item;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: script.id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  };
+  return (
+    <div ref={setNodeRef} style={style} className={`quickStartItem ${isDragging ? "dragging" : ""}`}>
+      <button
+        className="quickStartDragHandle"
+        title={`Drag to reorder ${script.name}`}
+        aria-label={`Drag to reorder ${script.name}`}
+        {...attributes}
+        {...listeners}
+      >
+        <GripVertical size={15} />
+      </button>
+      <Star className="quickStartStar" size={15} fill="currentColor" aria-hidden="true" />
+      <div>
+        <strong>{script.name}</strong>
+        <span className="quickStartModel">
+          {model.name}
+          {model.source === "ninfer" && <Pill tone="ninfer">NInfer</Pill>}
+        </span>
+      </div>
+      <div className="quickStartActions">
+        <IconButton icon={Pencil} label={`Edit ${script.name}`} onClick={() => onEdit(item)} />
+        <button className="primary" onClick={() => onStart(script.id)}><Play size={14} /> Start</button>
+      </div>
+    </div>
+  );
+}
+
+function FavoriteScriptDragPreview({ item }) {
+  if (!item) return null;
+  return (
+    <div className="favoriteScriptDragPreview">
+      <GripVertical size={15} />
+      <span><strong>{item.script.name}</strong><small>{item.model.name}</small></span>
+    </div>
+  );
+}
+
 function SortableModelBlock({ model, draggingDisabled, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: model.id,
@@ -908,6 +1031,53 @@ function ModelDragPreview({ model }) {
     <div className="modelDragPreview">
       <strong>{model.name}</strong>
       <span>{model.quantization || "unknown quant"} / {formatBytes(model.size_bytes)}{model.source === "ninfer" ? " / NInfer" : ""}</span>
+    </div>
+  );
+}
+
+function SortableDashboardSection({ id, title, collapsed, onToggle, children }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`dashboardSection dashboardSection--${id} ${collapsed ? "collapsed" : ""} ${isDragging ? "dragging" : ""}`}
+    >
+      <div className="dashboardSectionControls">
+        <button
+          className="dashboardDragHandle"
+          title={`Drag to reorder ${title}`}
+          aria-label={`Drag to reorder ${title}`}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={15} />
+        </button>
+        <button
+          className="dashboardCollapseButton"
+          title={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+          aria-label={collapsed ? `Expand ${title}` : `Collapse ${title}`}
+          aria-expanded={!collapsed}
+          onClick={onToggle}
+        >
+          {collapsed ? <ChevronDown size={15} /> : <ChevronUp size={15} />}
+        </button>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function DashboardSectionDragPreview({ title, id }) {
+  if (!id) return null;
+  return (
+    <div className={`dashboardSectionDragPreview dashboardSectionDragPreview--${id}`}>
+      <GripVertical size={15} />
+      <strong>{title}</strong>
     </div>
   );
 }
@@ -1068,6 +1238,8 @@ function ModelUsage({ model, usage, reload, reloadUsage, toast }) {
 function Library({ models, usage, reload, reloadUsage, toast }) {
   const [orderedModels, setOrderedModels] = useState(models);
   const [activeModelId, setActiveModelId] = useState(null);
+  const [activeFavoriteScriptId, setActiveFavoriteScriptId] = useState(null);
+  const [editingFavoriteScript, setEditingFavoriteScript] = useState(null);
   const [editingScripts, setEditingScripts] = useState({});
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -1077,13 +1249,20 @@ function Library({ models, usage, reload, reloadUsage, toast }) {
   const favoriteScripts = useMemo(
     () => orderedModels.flatMap((model) => (model.scripts || [])
       .filter((script) => script.is_favorite)
-      .map((script) => ({ model, script }))),
+      .map((script) => ({ model, script })))
+      .sort((left, right) => (left.script.favorite_order ?? Number.MAX_SAFE_INTEGER) - (right.script.favorite_order ?? Number.MAX_SAFE_INTEGER)),
     [orderedModels]
   );
+  const [orderedFavoriteScripts, setOrderedFavoriteScripts] = useState(favoriteScripts);
+  const activeFavoriteScript = orderedFavoriteScripts.find(({ script }) => script.id === activeFavoriteScriptId);
 
   useEffect(() => {
     setOrderedModels(models);
   }, [models]);
+
+  useEffect(() => {
+    setOrderedFavoriteScripts(favoriteScripts);
+  }, [favoriteScripts]);
 
   function markScriptEditing(modelId, scriptId, editing) {
     setEditingScripts((current) => {
@@ -1117,6 +1296,27 @@ function Library({ models, usage, reload, reloadUsage, toast }) {
       toast("Model order saved");
     } catch (error) {
       setOrderedModels(previous);
+      toast(error.message);
+    }
+  }
+
+  async function reorderFavoriteScripts(activeId, overId) {
+    if (!overId || activeId === overId) return;
+    const oldIndex = orderedFavoriteScripts.findIndex(({ script }) => script.id === activeId);
+    const newIndex = orderedFavoriteScripts.findIndex(({ script }) => script.id === overId);
+    if (oldIndex < 0 || newIndex < 0) return;
+    const previous = orderedFavoriteScripts;
+    const next = arrayMove(orderedFavoriteScripts, oldIndex, newIndex);
+    setOrderedFavoriteScripts(next);
+    try {
+      await request("/api/scripts/favorites/order", {
+        method: "PATCH",
+        body: JSON.stringify({ script_ids: next.map(({ script }) => script.id) })
+      });
+      reload();
+      toast("Favourite script order saved");
+    } catch (error) {
+      setOrderedFavoriteScripts(previous);
       toast(error.message);
     }
   }
@@ -1168,29 +1368,31 @@ function Library({ models, usage, reload, reloadUsage, toast }) {
         <div className="sectionTitle">
           <Star size={16} />
           <h2>Quick start favourite scripts</h2>
-          {!!favoriteScripts.length && <span className="sectionCount">{favoriteScripts.length}</span>}
+          {!!orderedFavoriteScripts.length && <span className="sectionCount">{orderedFavoriteScripts.length}</span>}
         </div>
-        {!favoriteScripts.length && (
+        {!orderedFavoriteScripts.length && (
           <div className="empty quickStartEmpty">Star a loading script in the model library to keep it within easy reach.</div>
         )}
-        {!!favoriteScripts.length && (
-          <div className="quickStartGrid">
-            {favoriteScripts.map(({ model, script }) => (
-              <div className="quickStartItem" key={script.id}>
-                <Star size={15} fill="currentColor" aria-hidden="true" />
-                <div>
-                  <strong>{script.name}</strong>
-                  <span className="quickStartModel">
-                    {model.name}
-                    {model.source === "ninfer" && <Pill tone="ninfer">NInfer</Pill>}
-                  </span>
-                </div>
-                <button className="primary" onClick={() => start(script.id)}>
-                  <Play size={14} /> Start
-                </button>
+        {!!orderedFavoriteScripts.length && (
+          <DndContext
+            sensors={sensors}
+            collisionDetection={closestCenter}
+            onDragStart={(event) => setActiveFavoriteScriptId(event.active.id)}
+            onDragCancel={() => setActiveFavoriteScriptId(null)}
+            onDragEnd={(event) => {
+              setActiveFavoriteScriptId(null);
+              reorderFavoriteScripts(event.active.id, event.over?.id);
+            }}
+          >
+            <SortableContext items={orderedFavoriteScripts.map(({ script }) => script.id)} strategy={verticalListSortingStrategy}>
+              <div className="quickStartGrid">
+                {orderedFavoriteScripts.map((item) => (
+                  <SortableFavoriteScript key={item.script.id} item={item} onStart={start} onEdit={setEditingFavoriteScript} />
+                ))}
               </div>
-            ))}
-          </div>
+            </SortableContext>
+            <DragOverlay><FavoriteScriptDragPreview item={activeFavoriteScript} /></DragOverlay>
+          </DndContext>
         )}
       </section>
       <section className="band modelLibraryBand">
@@ -1273,6 +1475,14 @@ function Library({ models, usage, reload, reloadUsage, toast }) {
         </DragOverlay>
       </DndContext>
       </section>
+      {editingFavoriteScript && (
+        <FavoriteScriptEditorModal
+          item={editingFavoriteScript}
+          onClose={() => setEditingFavoriteScript(null)}
+          reload={reload}
+          toast={toast}
+        />
+      )}
     </>
   );
 }
@@ -1321,6 +1531,7 @@ function UsagePanel({ usage, range, setRange, page, setPage, reloadUsage, reload
       toast(error.message);
     }
   }
+
   return (
     <section className="band usageBand">
       <div className="sectionTitle">
@@ -1638,6 +1849,12 @@ function App() {
   const [usageRange, setUsageRange] = useState("all");
   const [usagePage, setUsagePage] = useState(0);
   const [toastText, setToastText] = useState("");
+  const [dashboardLayout, setDashboardLayout] = useState(loadDashboardLayout);
+  const [activeDashboardSectionId, setActiveDashboardSectionId] = useState(null);
+  const dashboardSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const toast = useCallback((message) => {
     setToastText(message);
@@ -1684,6 +1901,53 @@ function App() {
     return () => window.clearInterval(timer);
   }, [reloadUsage]);
 
+  useEffect(() => {
+    window.localStorage.setItem(DASHBOARD_LAYOUT_KEY, JSON.stringify(dashboardLayout));
+  }, [dashboardLayout]);
+
+  const dashboardSections = {
+    import: {
+      title: "Import Existing Model",
+      content: <ImportModel reload={reload} toast={toast} settings={settings} />
+    },
+    downloads: {
+      title: "Download Queue",
+      content: <Downloads downloads={downloads} reload={reload} toast={toast} />
+    },
+    usage: {
+      title: "Usage & Cost",
+      content: <UsagePanel usage={usage} range={usageRange} setRange={setUsageRange} page={usagePage} setPage={setUsagePage} reload={reload} reloadUsage={() => reloadUsage().catch(() => {})} toast={toast} />
+    },
+    runs: {
+      title: "Active Runs & Terminal",
+      content: <Runs runs={runs} models={models} reload={reload} toast={toast} />
+    },
+    benchmarks: {
+      title: "Benchmark Dashboard",
+      content: <Benchmarks presets={presets} models={models} runs={runs} reload={reload} toast={toast} />
+    }
+  };
+  const activeDashboardSection = dashboardSections[activeDashboardSectionId];
+
+  function toggleDashboardSection(id) {
+    setDashboardLayout((current) => ({
+      ...current,
+      collapsed: current.collapsed.includes(id)
+        ? current.collapsed.filter((sectionId) => sectionId !== id)
+        : [...current.collapsed, id]
+    }));
+  }
+
+  function reorderDashboardSections(activeId, overId) {
+    if (!overId || activeId === overId) return;
+    setDashboardLayout((current) => {
+      const oldIndex = current.order.indexOf(activeId);
+      const newIndex = current.order.indexOf(overId);
+      if (oldIndex < 0 || newIndex < 0) return current;
+      return { ...current, order: arrayMove(current.order, oldIndex, newIndex) };
+    });
+  }
+
   return (
     <>
       <TopTelemetry telemetry={telemetry} usage={usage} refresh={() => reload().catch((error) => toast(error.message))} />
@@ -1694,13 +1958,38 @@ function App() {
             <Discover toast={toast} reload={reload} telemetry={telemetry} />
             <Library models={models} usage={usage} reload={reload} reloadUsage={reloadUsage} toast={toast} />
           </div>
-          <div className="stack">
-            <ImportModel reload={reload} toast={toast} settings={settings} />
-            <Downloads downloads={downloads} reload={reload} toast={toast} />
-            <UsagePanel usage={usage} range={usageRange} setRange={setUsageRange} page={usagePage} setPage={setUsagePage} reload={reload} reloadUsage={() => reloadUsage().catch(() => {})} toast={toast} />
-            <Runs runs={runs} models={models} reload={reload} toast={toast} />
-            <Benchmarks presets={presets} models={models} runs={runs} reload={reload} toast={toast} />
-          </div>
+          <DndContext
+            sensors={dashboardSensors}
+            collisionDetection={closestCenter}
+            onDragStart={(event) => setActiveDashboardSectionId(event.active.id)}
+            onDragCancel={() => setActiveDashboardSectionId(null)}
+            onDragEnd={(event) => {
+              setActiveDashboardSectionId(null);
+              reorderDashboardSections(event.active.id, event.over?.id);
+            }}
+          >
+            <SortableContext items={dashboardLayout.order} strategy={verticalListSortingStrategy}>
+              <div className="stack dashboardSectionStack">
+                {dashboardLayout.order.map((id) => {
+                  const section = dashboardSections[id];
+                  return (
+                    <SortableDashboardSection
+                      key={id}
+                      id={id}
+                      title={section.title}
+                      collapsed={dashboardLayout.collapsed.includes(id)}
+                      onToggle={() => toggleDashboardSection(id)}
+                    >
+                      {section.content}
+                    </SortableDashboardSection>
+                  );
+                })}
+              </div>
+            </SortableContext>
+            <DragOverlay>
+              <DashboardSectionDragPreview title={activeDashboardSection?.title} id={activeDashboardSectionId} />
+            </DragOverlay>
+          </DndContext>
         </div>
       </main>
       {toastText && <div className="toast">{toastText}</div>}

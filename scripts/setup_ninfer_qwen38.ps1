@@ -73,7 +73,7 @@ HF_VENV="$ROOT/.hf-venv"
 LOG_DIR="$ROOT/logs"
 LAUNCHER="$ROOT/run-qwen38-nvfp4.sh"
 FACTS="$ROOT/wsl-info.json"
-MIN_RUNTIME_REV="5d2c1f5590b8f4c3d106a75f65210eb4efb8f4e1"
+MIN_RUNTIME_REV="3e903b70"
 EXPECTED_SHA="bb3360522a06e136e0367f5703414d26272b7285c8a6ab6194135c17dbd81b32"
 CUDA_HOME="/usr/local/cuda-13.1"
 
@@ -283,10 +283,11 @@ SERVER="$ROOT/ninfer/build-cuda131/apps/ninfer-serve"
 MODEL="$ROOT/models/qwen3_8_27b_nvfp4.ninfer"
 LOG_DIR="$ROOT/logs"
 PIDFILE="$ROOT/server.pid"
-HOST="${NINFER_HOST:-127.0.0.1}"
-PORT="${NINFER_PORT:-8081}"
-CONCURRENCY="${NINFER_CONCURRENCY:-3}"
-MIN_CONTEXT="${NINFER_MIN_CONTEXT:-163840}"
+HOST="${NINFER_HOST:-0.0.0.0}"
+PORT="${NINFER_PORT:-8094}"
+CONCURRENCY="${NINFER_CONCURRENCY:-2}"
+MAX_CONTEXT="${NINFER_MAX_CONTEXT:-252928}"
+KV_CAPACITY="${NINFER_KV_CAPACITY:-auto}"
 
 export PATH="/usr/lib/wsl/lib:/usr/local/cuda-13.1/bin:$PATH"
 export LD_LIBRARY_PATH="/usr/lib/wsl/lib:/usr/local/cuda-13.1/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -349,6 +350,19 @@ if (( CONCURRENCY < 1 || CONCURRENCY > 8 )); then
     exit 1
 fi
 
+if ! [[ "$MAX_CONTEXT" =~ ^[0-9]+$ ]] || (( MAX_CONTEXT < 1 )); then
+    echo "ERROR: NINFER_MAX_CONTEXT must be a positive integer." >&2
+    exit 1
+fi
+
+if [[ "$KV_CAPACITY" != "auto" ]]; then
+    if ! [[ "$KV_CAPACITY" =~ ^[0-9]+$ ]] || (( KV_CAPACITY < CONCURRENCY * MAX_CONTEXT )); then
+        echo "ERROR: NINFER_KV_CAPACITY must be auto or at least concurrency x max-context." >&2
+        echo "Configured: $KV_CAPACITY KV tokens for $CONCURRENCY x $MAX_CONTEXT-token requests." >&2
+        exit 1
+    fi
+fi
+
 if [[ ! -x "$SERVER" || ! -f "$MODEL" ]]; then
     echo "ERROR: NInfer or the model is missing. Rerun setup_ninfer_qwen38.cmd." >&2
     exit 1
@@ -364,126 +378,77 @@ if health_ok; then
     exit 1
 fi
 
-# If NINFER_MAX_CONTEXT is set explicitly, only that value is tried.
-# Otherwise we start at the native 262,144 ceiling and step down until the
-# largest practical profile in this ladder starts with Vision+MTP3+C=3.
-if [[ -n "${NINFER_MAX_CONTEXT:-}" ]]; then
-    CONTEXTS=("$NINFER_MAX_CONTEXT")
-else
-    CONTEXTS=(262144 245760 229376 212992 196608 180224 163840)
-fi
-
 echo
 echo "Starting Qwen3.8-27B NVFP4"
 echo "  Vision:          enabled"
-echo "  MTP:             3 draft tokens + optimized proposal head"
-echo "  KV:              INT8 group-64, shared pool, auto-sized"
+echo "  MTP:             4 draft tokens + optimized proposal head"
+echo "  KV:              FP8, $KV_CAPACITY-token shared pool"
 echo "  Concurrency cap: $CONCURRENCY"
-echo "  Context target:  largest startup-successful value >= $MIN_CONTEXT"
+echo "  Context per lane:$MAX_CONTEXT tokens"
 echo "  CUDA Graphs:     enabled (NInfer default)"
 echo "  Prefix reuse:    enabled (NInfer default)"
 echo "  Extra args:      ${SERVER_ARGS[*]:-none}"
 echo
 
-try_ladder() {
-    local PASS_C=$1
-    local CTX
-    for CTX in "${CONTEXTS[@]}"; do
-        if (( CTX < MIN_CONTEXT )); then
-            continue
-        fi
+"$SERVER" "$MODEL" \
+    --host "$HOST" \
+    --port "$PORT" \
+    --max-context "$MAX_CONTEXT" \
+    --kv-capacity "$KV_CAPACITY" \
+    --max-concurrency "$CONCURRENCY" \
+    --pending-timeout-ms 300000 \
+    --kv-dtype fp8 \
+    --prefill-chunk 1024 \
+    --device-state-slots 2 \
+    --host-state-slots 8 \
+    --host-kv-mib 16384 \
+    --spec mtp \
+    --draft-tokens 4 \
+    --lm-head-draft \
+    --vision \
+    --request-log-jsonl "$REQUEST_LOG" \
+    "${SERVER_ARGS[@]}" &
+PID=$!
+echo "$PID" > "$PIDFILE"
 
-        echo "------------------------------------------------------------"
-        echo "Trying max-context=$CTX with kv-capacity=auto (concurrency=$PASS_C) ..."
-        echo "------------------------------------------------------------"
-
-        "$SERVER" "$MODEL" \
-            --host "$HOST" \
-            --port "$PORT" \
-            --max-context "$CTX" \
-            --kv-capacity auto \
-            --max-concurrency "$PASS_C" \
-            --kv-dtype int8 \
-            --prefill-chunk 1024 \
-            --spec mtp \
-            --draft-tokens 3 \
-            --lm-head-draft \
-            --vision \
-            --request-log-jsonl "$REQUEST_LOG" \
-            "${SERVER_ARGS[@]}" &
-        PID=$!
-        echo "$PID" > "$PIDFILE"
-
-        HEALTHY=0
-        while kill -0 "$PID" 2>/dev/null; do
-            if health_ok; then
-                HEALTHY=1
-                break
-            fi
-            sleep 1
-        done
-
-        if (( HEALTHY )); then
-            echo
-            echo "============================================================"
-            echo " READY"
-            echo "============================================================"
-            echo "Model:            qwen3.8-27b / nvfp4"
-            echo "Endpoint:         http://$HOST:$PORT/v1"
-            echo "Max context:      $CTX tokens per sequence"
-            echo "Max concurrency:  $PASS_C"
-            echo "Vision:           ON"
-            echo "MTP3:             ON"
-            echo "KV cache:         INT8, auto-sized shared pool"
-            echo "Request log:      $REQUEST_LOG"
-            echo "PID file:         $PIDFILE"
-            echo
-            echo "Current GPU memory after startup:"
-            nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader || true
-            echo
-            echo "NInfer's startup output above contains the exact resolved KV-capacity ledger."
-
-            cleanup() {
-                rm -f "$PIDFILE"
-            }
-            trap 'kill -INT "$PID" 2>/dev/null || true; cleanup' INT TERM EXIT
-            if wait "$PID"; then
-                exit 0
-            else
-                exit $?
-            fi
-        fi
-
-        if wait "$PID"; then
-            RC=0
-        else
-            RC=$?
-        fi
-        rm -f "$PIDFILE"
-        echo "Startup at max-context=$CTX exited with code $RC; trying the next lower context target." >&2
-    done
-    return 1
-}
-
-if try_ladder "$CONCURRENCY"; then
-    exit 0
-fi
-
-if (( CONCURRENCY > 1 )); then
-    echo >&2
-    echo "No context >= $MIN_CONTEXT started with concurrency=$CONCURRENCY." >&2
-    echo "Retrying the ladder once with concurrency=1 (KV pool sized for one active sequence)." >&2
-    echo >&2
-    if try_ladder 1; then
-        exit 0
+HEALTHY=0
+while kill -0 "$PID" 2>/dev/null; do
+    if health_ok; then
+        HEALTHY=1
+        break
     fi
+    sleep 1
+done
+
+if (( ! HEALTHY )); then
+    if wait "$PID"; then RC=0; else RC=$?; fi
+    rm -f "$PIDFILE"
+    echo "ERROR: the exact C$CONCURRENCY x $MAX_CONTEXT profile failed to start (exit $RC)." >&2
+    echo "No lower-capacity or single-agent fallback was attempted." >&2
+    exit "$RC"
 fi
 
-echo >&2
-echo "ERROR: NVFP4 + Vision + MTP3 could not start at any configured context >= $MIN_CONTEXT." >&2
-echo "I am deliberately NOT silently switching to a different quant or disabling Vision/MTP." >&2
-echo "The next step is to inspect the startup memory ledger and decide which constraint to trade." >&2
-exit 1
+echo
+echo "============================================================"
+echo " READY: two 252928-token lanes"
+echo "============================================================"
+echo "Model:            qwen3.8-27b / nvfp4"
+echo "Endpoint:         http://$HOST:$PORT/v1"
+echo "Max context:      $MAX_CONTEXT tokens per sequence"
+echo "Shared KV:        $KV_CAPACITY tokens"
+echo "Max concurrency:  $CONCURRENCY"
+echo "Vision:           ON"
+echo "MTP4:             ON"
+echo "KV cache:         FP8"
+echo "Request log:      $REQUEST_LOG"
+echo "PID file:         $PIDFILE"
+echo
+echo "Current GPU memory after startup:"
+nvidia-smi --query-gpu=memory.used,memory.free --format=csv,noheader || true
+
+cleanup() { rm -f "$PIDFILE"; }
+trap 'kill -INT "$PID" 2>/dev/null || true; cleanup' INT TERM EXIT
+if wait "$PID"; then exit 0; else exit $?; fi
 BASH
 chmod +x "$LAUNCHER"
 
@@ -554,10 +519,10 @@ $facts = [ordered]@{
     model_size_bytes  = [long]$wslInfo.model_size_bytes
     model_sha256      = $wslInfo.model_sha256
     runtime_revision  = $wslInfo.runtime_revision
-    port              = 8081
-    concurrency       = 3
-    max_context       = 262144
-    min_context       = 163840
+    port              = 8094
+    concurrency       = 2
+    max_context       = 252928
+    kv_capacity       = "auto"
 }
 $facts | ConvertTo-Json | Set-Content -LiteralPath $factsPath -Encoding UTF8
 Write-Host "Wrote loader facts: $factsPath" -ForegroundColor Green

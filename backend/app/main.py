@@ -90,6 +90,10 @@ class ScriptFavoriteIn(BaseModel):
     is_favorite: bool
 
 
+class FavoriteScriptOrderIn(BaseModel):
+    script_ids: list[str]
+
+
 class StartRunIn(BaseModel):
     script_id: str
     manual_vram_mib: int | None = None
@@ -409,6 +413,16 @@ def update_script_favorite(model_id: str, script_id: str, body: ScriptFavoriteIn
         (int(body.is_favorite), now(), script_id),
     )
     return store.row("select * from scripts where id=?", (script_id,)) or {"id": script_id}
+
+
+@app.patch("/api/scripts/favorites/order")
+def update_favorite_script_order(body: FavoriteScriptOrderIn) -> dict[str, bool]:
+    current_ids = [row["id"] for row in store.rows("select id from scripts where is_favorite=1")]
+    if len(body.script_ids) != len(current_ids) or set(body.script_ids) != set(current_ids):
+        raise HTTPException(status_code=400, detail="Favourite script order must include every favourite script exactly once.")
+    for index, script_id in enumerate(body.script_ids):
+        store.execute("update scripts set favorite_order=? where id=?", (index, script_id))
+    return {"ok": True}
 
 
 @app.delete("/api/models/{model_id}/scripts/{script_id}")

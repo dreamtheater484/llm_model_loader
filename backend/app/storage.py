@@ -82,6 +82,7 @@ class Store:
                     parsed_json text not null,
                     estimated_vram_mib integer,
                     is_favorite integer not null default 0,
+                    favorite_order integer,
                     created_at real not null,
                     updated_at real not null,
                     foreign key(model_id) references models(id) on delete cascade
@@ -187,6 +188,8 @@ class Store:
         script_columns = {row["name"] for row in conn.execute("pragma table_info(scripts)").fetchall()}
         if "is_favorite" not in script_columns:
             conn.execute("alter table scripts add column is_favorite integer not null default 0")
+        if "favorite_order" not in script_columns:
+            conn.execute("alter table scripts add column favorite_order integer")
         download_columns = {row["name"] for row in conn.execute("pragma table_info(downloads)").fetchall()}
         if "group_id" not in download_columns:
             conn.execute("alter table downloads add column group_id text")

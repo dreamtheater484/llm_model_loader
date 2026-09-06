@@ -3,7 +3,7 @@ import unittest
 from backend.app.scripts import detect_quantization, parse_script
 from backend.app.runs import _with_ninfer_defaults
 
-NINFER_SCRIPT = """& wsl.exe -d "Ubuntu-24.04" -- bash -lc 'NINFER_PORT=8081 NINFER_CONCURRENCY=3 NINFER_MAX_CONTEXT=262144 NINFER_MIN_CONTEXT=163840 NINFER_MODEL_FILE=qwen3_8_27b_nvfp4.ninfer ~/ninfer-qwen38/run-qwen38-nvfp4.sh --model-id qwen3.8-27b'"""
+NINFER_SCRIPT = """& wsl.exe -d "Ubuntu-24.04" -- bash -lc 'NINFER_PORT=8094 NINFER_CONCURRENCY=2 NINFER_MAX_CONTEXT=252928 NINFER_KV_CAPACITY=auto NINFER_MODEL_FILE=qwen3_8_27b_nvfp4.ninfer ~/ninfer-qwen38/run-qwen38-nvfp4.sh --model-id qwen3.8-27b'"""
 
 
 class NInferScriptTests(unittest.TestCase):
@@ -14,9 +14,9 @@ class NInferScriptTests(unittest.TestCase):
         self.assertEqual(info.wsl_distro, "Ubuntu-24.04")
         self.assertEqual(info.wsl_launcher, "~/ninfer-qwen38/run-qwen38-nvfp4.sh")
         self.assertEqual(info.host, "127.0.0.1")
-        self.assertEqual(info.port, 8081)
-        self.assertEqual(info.ctx_size, 163840)
-        self.assertEqual(info.concurrency, 3)
+        self.assertEqual(info.port, 8094)
+        self.assertEqual(info.ctx_size, 252928)
+        self.assertEqual(info.concurrency, 2)
         self.assertEqual(info.model_ref, "qwen3.8-27b")
         self.assertEqual(info.alias, None)
         self.assertEqual(info.quantization, "NVFP4")
@@ -28,7 +28,7 @@ class NInferScriptTests(unittest.TestCase):
         self.assertEqual(info.runtime, "ninfer")
         self.assertEqual(info.wsl_distro, "Ubuntu")
         self.assertEqual(info.host, "127.0.0.1")
-        self.assertEqual(info.port, 8081)
+        self.assertEqual(info.port, 8094)
 
     def test_parse_script_ninfer_explicit_host(self):
         info = parse_script('& wsl.exe -d "Ubuntu" -- bash -lc "NINFER_HOST=0.0.0.0 NINFER_PORT=9090 ~/ninfer-qwen38/run-qwen38-nvfp4.sh"')
@@ -51,9 +51,9 @@ class NInferScriptTests(unittest.TestCase):
         self.assertEqual(info.ctx_size, 131072)
 
     def test_with_ninfer_defaults_injects_lan_host(self):
-        args = ["-lc", "NINFER_PORT=8081 ~/ninfer-qwen38/run-qwen38-nvfp4.sh"]
+        args = ["-lc", "NINFER_PORT=8094 ~/ninfer-qwen38/run-qwen38-nvfp4.sh"]
         result = _with_ninfer_defaults(args)
-        self.assertEqual(result[1], "NINFER_HOST=0.0.0.0 NINFER_PORT=8081 ~/ninfer-qwen38/run-qwen38-nvfp4.sh")
+        self.assertEqual(result[1], "NINFER_HOST=0.0.0.0 NINFER_PORT=8094 ~/ninfer-qwen38/run-qwen38-nvfp4.sh")
 
     def test_with_ninfer_defaults_preserves_explicit_host(self):
         args = ["-lc", "NINFER_HOST=127.0.0.1 ~/ninfer-qwen38/run-qwen38-nvfp4.sh"]

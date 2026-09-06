@@ -26,7 +26,7 @@ This keeps the stock llama.cpp runtime installed by `setup.cmd` and places the B
 
 ## NInfer + Qwen3.8-27B NVFP4 (WSL2)
 
-[NInfer](https://github.com/Neroued/ninfer) serves the `neroued/Qwen3.8-27B-nvfp4-NInfer` artifact (`qwen3_8_27b_nvfp4.ninfer`, 20 GB, SHA-256 `bb336052…81b32`) with Vision, MTP3 speculative decoding, INT8 shared KV pool, and CUDA Graphs on an RTX 5090 (`sm_120a`). It runs as a native Linux server inside WSL2; the loader starts, health-checks, and stops it like any other preset.
+[NInfer](https://github.com/Neroued/ninfer) serves the `neroued/Qwen3.8-27B-nvfp4-NInfer` artifact (`qwen3_8_27b_nvfp4.ninfer`, 20 GB, SHA-256 `bb336052…81b32`) with Vision, MTP4 speculative decoding, an auto-sized FP8 shared KV pool, and CUDA Graphs on an RTX 5090 (`sm_120a`). It runs as a native Linux server inside WSL2; the loader starts, health-checks, and stops it like any other preset.
 
 Requirements: an Ubuntu 24.04 WSL2 distro (name it `Ubuntu-24.04` if you want the auto-discovery to prefer it), and an NVIDIA driver that exposes CUDA 13.1+ to WSL.
 
@@ -34,13 +34,13 @@ Requirements: an Ubuntu 24.04 WSL2 distro (name it `Ubuntu-24.04` if you want th
 setup_ninfer_qwen38.cmd
 ```
 
-This installs CUDA Toolkit 13.1 and build dependencies, clones and pins NInfer (minimum runtime revision `5d2c1f5…`), builds `ninfer-serve`, downloads and SHA-verifies the model into `~/ninfer-qwen38/`, writes a persistent `run-qwen38-nvfp4.sh` launcher, and registers the "Qwen3.8-27B-NVFP4 (NInfer)" model + preset in the loader. It does not start the server. Re-running it is safe: it reuses everything already in place and only upgrades NInfer source when needed.
+This installs CUDA Toolkit 13.1 and build dependencies, upgrades NInfer to a revision that supports FP8 KV and host-backed continuation caching, builds `ninfer-serve`, downloads and SHA-verifies the model into `~/ninfer-qwen38/`, writes a persistent `run-qwen38-nvfp4.sh` launcher, and registers the "Qwen3.8-27B-NVFP4 (NInfer)" model + preset in the loader. It does not start the server. Re-running it is safe: it reuses everything already in place and only upgrades NInfer source when needed.
 
-- **Running:** start the loader, open the model, press **Start** in *Active runs & terminal*. The launcher tries the context ladder 262144 → 163840 and keeps the largest startup-successful value at or above the 163840 floor. The loader skips its VRAM gate (NInfer auto-sizes its shared KV pool).
+- **Running:** start the loader, open the model, press **Start** in *Active runs & terminal*. The preset uses the post's profile: `0.0.0.0:8094`, two concurrent sequences, `max-context=252928`, `kv-capacity=auto`, FP8 KV, two device-state slots, eight host-state slots, 16 GiB host KV, MTP4 with four draft tokens and the optimized proposal head, plus Vision. Startup fails instead of silently reducing concurrency, context, or capabilities. No API key is configured.
 - **Stopping:** press **Unload** in *Active runs & terminal*. The loader signals the server inside WSL (SIGINT, then SIGKILL after 15s) and cleans up the `wsl.exe` process.
 - **LAN:** like llama.cpp presets, the loader injects `NINFER_HOST=0.0.0.0` by default. `setup_ninfer_qwen38.cmd` also wires a one-time elevated portproxy + firewall rule + a `LLM-Model-Loader-NInfer-LAN` scheduled task that keeps the WSL2 NAT forwarding IP in sync; the loader re-triggers it whenever the server becomes healthy. Add `-SkipLanSetup` to the setup to stay localhost-only, or set `NINFER_HOST=127.0.0.1` in the raw script to opt out per-script.
-- **Endpoint:** `http://127.0.0.1:8081/v1` (OpenAI-compatible chat completions) once loaded; request `model` id is `qwen3.8-27b`. Port 8081 keeps NInfer distinct from llama.cpp presets (which stay on 8080). The server default caps `max_tokens` at 8192 per request; stay at or below that for chat/benchmarks.
-- **Bare-metal extras:** the launcher supports `~/ninfer-qwen38/run-qwen38-nvfp4.sh stop` / `status`, and its start mode forwards extra arguments to `ninfer-serve` (e.g. `--api-key`, `--max-concurrency`). All logging stays in the loader run terminal.
+- **Endpoint:** `http://127.0.0.1:8094/v1` (OpenAI-compatible chat completions) once loaded; request `model` id is `qwen3.8-27b`. Port 8094 keeps NInfer distinct from llama.cpp presets (which stay on 8080). The 252,928-token limit includes both prompt and output tokens.
+- **Bare-metal extras:** the launcher supports `~/ninfer-qwen38/run-qwen38-nvfp4.sh stop` / `status`, and its start mode forwards extra arguments to `ninfer-serve` (for example, `--max-concurrency`). All logging stays in the loader run terminal.
 - **Facts:** the loader reads `ninfer-wsl.json` from `%LOCALAPPDATA%\llm-model-loader\` (or `LLM_MODEL_LOADER_DATA_DIR`) on every re-run of the setup; the registered model path is the `\\wsl.localhost\<distro>\...` UNC form.
 
 ## Run

@@ -7,7 +7,14 @@ from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
 
-from backend.app.main import ModelOrderIn, ScriptFavoriteIn, update_model_order, update_script_favorite
+from backend.app.main import (
+    FavoriteScriptOrderIn,
+    ModelOrderIn,
+    ScriptFavoriteIn,
+    update_favorite_script_order,
+    update_model_order,
+    update_script_favorite,
+)
 from backend.app.runs import RunManager, _with_loader_defaults
 from backend.app.storage import Store
 
@@ -64,6 +71,22 @@ class ModelOrderTests(unittest.TestCase):
                 with self.subTest(payload=payload):
                     with self.assertRaises(HTTPException):
                         update_model_order(ModelOrderIn(model_ids=payload))
+
+    def test_update_favorite_script_order_accepts_complete_permutation(self):
+        executed = []
+        with patch("backend.app.main.store.rows", return_value=[{"id": "a"}, {"id": "b"}, {"id": "c"}]):
+            with patch("backend.app.main.store.execute", side_effect=lambda query, params=(): executed.append(tuple(params))):
+                result = update_favorite_script_order(FavoriteScriptOrderIn(script_ids=["c", "a", "b"]))
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(executed, [(0, "c"), (1, "a"), (2, "b")])
+
+    def test_update_favorite_script_order_rejects_incomplete_or_unknown_ids(self):
+        with patch("backend.app.main.store.rows", return_value=[{"id": "a"}, {"id": "b"}]):
+            for payload in (["a"], ["a", "a"], ["a", "x"]):
+                with self.subTest(payload=payload):
+                    with self.assertRaises(HTTPException):
+                        update_favorite_script_order(FavoriteScriptOrderIn(script_ids=payload))
 
 
 class RunHistoryTests(unittest.TestCase):

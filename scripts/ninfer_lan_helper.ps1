@@ -1,6 +1,6 @@
 # One-time WSL2 NAT LAN wiring for the NInfer server.
 #
-#   scripts\ninfer_lan_helper.ps1 -Distro Ubuntu -Port 8081
+#   scripts\ninfer_lan_helper.ps1 -Distro Ubuntu -Port 8094
 #
 # - Creates a SYSTEM scheduled task (onlogon) that keeps the portproxy WSL IP
 #   in sync, so the port stays reachable across WSL restarts.
@@ -8,7 +8,7 @@
 # - If the task already exists, re-sync runs elevated as SYSTEM with no UAC.
 param(
     [string]$Distro,
-    [int]$Port = 8081,
+    [int]$Port = 8094,
     [switch]$SyncOnly
 )
 

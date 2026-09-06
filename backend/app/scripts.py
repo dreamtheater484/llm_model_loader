@@ -159,7 +159,7 @@ def parse_script(raw_script: str) -> ScriptInfo:
         launcher_match = NINFER_LAUNCHER_RE.search(payload or "")
         wsl_launcher = launcher_match.group(1) if launcher_match else None
         host = _ninfer_env(payload, "NINFER_HOST") or host
-        port = _ninfer_int(payload, "NINFER_PORT") or (8081 if is_ninfer else port)
+        port = _ninfer_int(payload, "NINFER_PORT") or (8094 if is_ninfer else port)
         concurrency = _ninfer_int(payload, "NINFER_CONCURRENCY")
         max_context = _ninfer_int(payload, "NINFER_MAX_CONTEXT")
         min_context = _ninfer_int(payload, "NINFER_MIN_CONTEXT")
@@ -180,7 +180,7 @@ def parse_script(raw_script: str) -> ScriptInfo:
     quant = detect_quantization(model_ref, alias, _ninfer_env(payload, "NINFER_MODEL_FILE"), raw_script)
     flash_value = (_value_after(args, "-fa", "--flash-attn") or "").lower()
     flash = flash_value in {"on", "true", "1", "yes"}
-    # NInfer's pinned preset hardcodes the MTP3 spec in the launcher, so any
+    # NInfer's pinned preset hardcodes the MTP4 spec in the launcher, so any
     # ninfer script implies speculative decoding is active.
     mtp = is_ninfer or "draft-mtp" in spec_type or (payload is not None and "--spec mtp" in payload)
     return ScriptInfo(
