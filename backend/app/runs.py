@@ -348,12 +348,16 @@ class RunManager:
         self._set_status(run_id, "loading", f"Loading: waiting for server health on {host}:{port}.")
         last_heartbeat = 0.0
         while process.poll() is None:
-            if not loaded and self._health(host, int(port)):
+            healthy = not loaded and self._health(host, int(port))
+            # Abort may stop the process while the health request is in flight.
+            if process.poll() is not None:
+                break
+            if healthy:
                 loaded = True
                 load_seconds = time.time() - start
                 message = f"Loaded: server is healthy after {self._format_seconds(load_seconds)}."
                 store.execute(
-                    "update runs set status='loaded', status_message=?, load_seconds=?, last_heartbeat_at=? where id=?",
+                    "update runs set status='loaded', status_message=?, load_seconds=?, last_heartbeat_at=? where id=? and status='loading'",
                     (message, load_seconds, now(), run_id),
                 )
                 self._append_log(run_id, f"[loader] {message}")
@@ -369,7 +373,7 @@ class RunManager:
                     else f"Loading: process alive for {self._format_seconds(current - start)}, waiting for /health on {host}:{port}."
                 )
                 store.execute(
-                    "update runs set status_message=?, last_heartbeat_at=? where id=?",
+                    "update runs set status_message=?, last_heartbeat_at=? where id=? and status in ('loading','loaded')",
                     (message, now(), run_id),
                 )
                 self._append_log(run_id, f"[loader] {message}")
@@ -386,15 +390,15 @@ class RunManager:
             message = f"Exited: loaded server stopped with code {code}."
         else:
             message = f"Failed: server exited with code {code} before becoming healthy."
-        self._append_log(run_id, f"[loader] {message}")
         current = store.row("select status from runs where id=?", (run_id,))
         if current and current.get("status") in {"aborted", "unloaded"}:
             with self._lock:
                 self._processes.pop(run_id, None)
             event_hub.publish_threadsafe("run", store.row("select * from runs where id=?", (run_id,)) or {})
             return
+        self._append_log(run_id, f"[loader] {message}")
         store.execute(
-            "update runs set status=?, ended_at=?, status_message=?, error=? where id=?",
+            "update runs set status=?, ended_at=?, status_message=?, error=? where id=? and status in ('loading','loaded')",
             (final_status, now(), message, None if code == 0 else f"Process exited with code {code}", run_id),
         )
         with self._lock:
@@ -427,7 +431,7 @@ class RunManager:
     @staticmethod
     def _set_status(run_id: str, status: str, message: str) -> None:
         store.execute(
-            "update runs set status=?, status_message=?, last_heartbeat_at=? where id=?",
+            "update runs set status=?, status_message=?, last_heartbeat_at=? where id=? and status in ('loading','loaded')",
             (status, message, now(), run_id),
         )
         event_hub.publish_threadsafe("run", store.row("select * from runs where id=?", (run_id,)) or {})

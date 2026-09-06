@@ -50,6 +50,7 @@ import {
   Zap
 } from "lucide-react";
 import "./styles.css";
+import { createDashboardRefresh } from "./refresh.js";
 
 const API = "";
 
@@ -1861,22 +1862,14 @@ function App() {
     window.setTimeout(() => setToastText(""), 3000);
   }, []);
 
-  const reload = useCallback(async () => {
-    const [settingsData, telemetryData, modelData, downloadData, runData, presetData] = await Promise.all([
-      request("/api/settings"),
-      request("/api/system/telemetry"),
-      request("/api/models"),
-      request("/api/downloads"),
-      request("/api/runs"),
-      request("/api/benchmarks")
-    ]);
-    setSettings(settingsData);
-    setTelemetry(telemetryData);
-    setModels(modelData);
-    setDownloads(downloadData);
-    setRuns(runData);
-    setPresets(presetData);
-  }, []);
+  const { reload, onEvent } = useMemo(() => createDashboardRefresh(request, {
+    settings: setSettings,
+    telemetry: setTelemetry,
+    models: setModels,
+    downloads: setDownloads,
+    runs: setRuns,
+    presets: setPresets
+  }), []);
 
   const reloadUsage = useCallback(async () => {
     const params = new URLSearchParams({ range: usageRange, page: String(usagePage) });
@@ -1888,12 +1881,12 @@ function App() {
     reload().catch((error) => toast(error.message));
     const timer = window.setInterval(() => reload().catch(() => {}), 5000);
     const ws = new WebSocket(`ws://${window.location.host}/ws/events`);
-    ws.onmessage = () => reload().catch(() => {});
+    ws.onmessage = (event) => onEvent(JSON.parse(event.data)).catch(() => {});
     return () => {
       window.clearInterval(timer);
       ws.close();
     };
-  }, [reload, toast]);
+  }, [reload, onEvent, toast]);
 
   useEffect(() => {
     reloadUsage().catch((error) => setUsage({ available: false, error: error.message, history: { items: [], total: 0, page: 0, page_size: 8 }, unmapped: [] }));
@@ -1950,7 +1943,11 @@ function App() {
 
   return (
     <>
-      <TopTelemetry telemetry={telemetry} usage={usage} refresh={() => reload().catch((error) => toast(error.message))} />
+      <TopTelemetry telemetry={telemetry && {
+        ...telemetry,
+        loaded_models: runs.filter((run) => run.status === "loaded").length,
+        loading_models: runs.filter((run) => run.status === "loading").length
+      }} usage={usage} refresh={() => reload().catch((error) => toast(error.message))} />
       <main>
         <Settings settings={settings} setSettings={setSettings} toast={toast} />
         <div className="grid two dashboardGrid">
